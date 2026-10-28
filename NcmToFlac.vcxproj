@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A7F3C2E1-5B4D-4E39-9C1A-6D2B8E7F4A10}</ProjectGuid>
+    <RootNamespace>NcmToFlac</RootNamespace>
+    <ProjectName>NcmToFlac</ProjectName>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <AppxPackage>false</AppxPackage>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsAppSDKVerifyTransitiveDependencies>false</WindowsAppSDKVerifyTransitiveDependencies>
+  </PropertyGroup>
+
+  <!--
+    NuGet packages are resolved from the machine-wide NuGet cache. There is no
+    nuget.exe / dotnet restore step here (this repo builds with MSBuild only), so
+    the packages are downloaded once by tools/fetch-packages.ps1 and imported
+    explicitly below. Bump the versions here when updating the SDK.
+  -->
+  <PropertyGroup Label="PackageVersions">
+    <NuGetPackagesDir Condition="'$(NuGetPackagesDir)' == ''">$(USERPROFILE)\.nuget\packages\</NuGetPackagesDir>
+    <PkgCppWinRT>$(NuGetPackagesDir)microsoft.windows.cppwinrt\2.0.250303.1\</PkgCppWinRT>
+    <PkgWASDK>$(NuGetPackagesDir)microsoft.windowsappsdk\1.8.260921001\</PkgWASDK>
+    <PkgWASDKBase>$(NuGetPackagesDir)microsoft.windowsappsdk.base\1.8.251216001\</PkgWASDKBase>
+    <PkgWASDKFoundation>$(NuGetPackagesDir)microsoft.windowsappsdk.foundation\1.8.260803002\</PkgWASDKFoundation>
+    <PkgWASDKWinUI>$(NuGetPackagesDir)microsoft.windowsappsdk.winui\1.8.260803003\</PkgWASDKWinUI>
+    <PkgWASDKIXP>$(NuGetPackagesDir)microsoft.windowsappsdk.interactiveexperiences\1.8.260708001\</PkgWASDKIXP>
+    <PkgWebView2>$(NuGetPackagesDir)microsoft.web.webview2\1.0.3179.45\</PkgWebView2>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)' == 'Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup Label="Output">
+    <OutDir>$(ProjectDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>NcmToFlac</TargetName>
+    <LocalDebuggerWorkingDirectory>$(OutDir)</LocalDebuggerWorkingDirectory>
+  </PropertyGroup>
+
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(PkgCppWinRT)build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('$(PkgCppWinRT)build\native\Microsoft.Windows.CppWinRT.props')" />
+    <Import Project="$(PkgWASDK)build\native\Microsoft.WindowsAppSDK.props" Condition="Exists('$(PkgWASDK)build\native\Microsoft.WindowsAppSDK.props')" />
+    <Import Project="$(PkgWASDKBase)build\native\Microsoft.WindowsAppSDK.Base.props" Condition="Exists('$(PkgWASDKBase)build\native\Microsoft.WindowsAppSDK.Base.props')" />
+    <Import Project="$(PkgWASDKIXP)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props" Condition="Exists('$(PkgWASDKIXP)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props')" />
+    <Import Project="$(PkgWASDKFoundation)build\native\Microsoft.WindowsAppSDK.Foundation.props" Condition="Exists('$(PkgWASDKFoundation)build\native\Microsoft.WindowsAppSDK.Foundation.props')" />
+    <Import Project="$(PkgWASDKWinUI)build\native\Microsoft.WindowsAppSDK.WinUI.props" Condition="Exists('$(PkgWASDKWinUI)build\native\Microsoft.WindowsAppSDK.WinUI.props')" />
+  </ImportGroup>
+
+  <!-- Microsoft.UI.Xaml.winmd references the WebView2 WinRT types, so the
+       WebView2 metadata must be resolvable when the C++/WinRT projection is
+       generated, even though this app never hosts a WebView. -->
+  <ItemGroup Label="WinRTReferences">
+    <Reference Include="$(PkgWebView2)lib\Microsoft.Web.WebView2.Core.winmd" Condition="Exists('$(PkgWebView2)lib\Microsoft.Web.WebView2.Core.winmd')">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="src\**\*.cpp" Exclude="src\pch.cpp" />
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClInclude Include="src\**\*.h" />
+    <Manifest Include="res\app.manifest" />
+  </ItemGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>shell32.lib;bcrypt.lib;shlwapi.lib;ole32.lib;uuid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(PkgCppWinRT)build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('$(PkgCppWinRT)build\native\Microsoft.Windows.CppWinRT.targets')" />
+    <Import Project="$(PkgWASDK)build\native\Microsoft.WindowsAppSDK.targets" Condition="Exists('$(PkgWASDK)build\native\Microsoft.WindowsAppSDK.targets')" />
+    <Import Project="$(PkgWASDKBase)build\native\Microsoft.WindowsAppSDK.Base.targets" Condition="Exists('$(PkgWASDKBase)build\native\Microsoft.WindowsAppSDK.Base.targets')" />
+    <Import Project="$(PkgWASDKIXP)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets" Condition="Exists('$(PkgWASDKIXP)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets')" />
+    <Import Project="$(PkgWASDKFoundation)build\native\Microsoft.WindowsAppSDK.Foundation.targets" Condition="Exists('$(PkgWASDKFoundation)build\native\Microsoft.WindowsAppSDK.Foundation.targets')" />
+    <Import Project="$(PkgWASDKWinUI)build\native\Microsoft.WindowsAppSDK.WinUI.targets" Condition="Exists('$(PkgWASDKWinUI)build\native\Microsoft.WindowsAppSDK.WinUI.targets')" />
+  </ImportGroup>
+
+  <Target Name="EnsurePackages" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(PkgWASDKWinUI)build\native\Microsoft.WindowsAppSDK.WinUI.props')"
+           Text="Windows App SDK packages are missing from '$(NuGetPackagesDir)'. Run tools/fetch-packages.ps1 first." />
+  </Target>
+
+</Project>

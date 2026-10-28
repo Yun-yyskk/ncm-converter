@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+Generated Files/
+*.user
+*.suo
+*.vcxproj.filters.bak
+
+# Local tools / logs
+tools/.cache/
+*.log
+
+# Screenshots and test artifacts; only the README preview is tracked
+/docs/*
+!/docs/preview.png
