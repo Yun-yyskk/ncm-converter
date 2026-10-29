@@ -83,6 +83,21 @@ const char* DetectImageMime(const std::vector<uint8_t>& data, size_t offset) {
     return nullptr;
 }
 
+// A bare MPEG stream starts with an 11 bit frame sync; an ID3v2 tag marks one
+// just as reliably. Anything else is a format this tool does not handle.
+AudioCodec DetectCodec(const std::vector<uint8_t>& stream) {
+    if (stream.size() >= 4 && memcmp(stream.data(), "fLaC", 4) == 0) return AudioCodec::Flac;
+    if (stream.size() >= 3 && memcmp(stream.data(), "ID3", 3) == 0) return AudioCodec::Mp3;
+
+    const size_t limit = (std::min)(stream.size(), static_cast<size_t>(4096));
+    for (size_t i = 0; i + 1 < limit; ++i) {
+        if (stream[i] != 0xFF || (stream[i + 1] & 0xE0) != 0xE0) continue;
+        if ((stream[i + 1] & 0x06) == 0) continue; // layer bits 00 are reserved
+        return AudioCodec::Mp3;
+    }
+    return AudioCodec::Unknown;
+}
+
 bool ReadWholeFile(const std::wstring& path, std::vector<uint8_t>& data, std::wstring& error) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) {
@@ -233,13 +248,9 @@ bool DecodeNcmFile(const std::wstring& path, NcmContent& out, std::wstring& erro
     out.audio.assign(raw.begin() + audioStart, raw.end());
     DecryptAudio(out.audio, rc4Key);
 
-    if (out.audio.size() > 4 && memcmp(out.audio.data(), "fLaC", 4) == 0) {
-        // lossless stream, nothing else to do
-    } else if (out.audio.size() > 4 && memcmp(out.audio.data(), "ID3", 3) == 0) {
-        error = L"这个 NCM 里保存的是 MP3 码流，不是 FLAC 无损流。";
-        return false;
-    } else {
-        error = L"解密后的码流不是 FLAC（可能是其他格式），暂不支持。";
+    out.codec = DetectCodec(out.audio);
+    if (out.codec == AudioCodec::Unknown) {
+        error = L"解密后的码流既不是 FLAC 也不是 MP3，暂不支持这种封装。";
         return false;
     }
 

@@ -15,8 +15,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root ('bin\x64\' + $Configuration + '\NcmToFlac.exe')
-if (-not (Test-Path $exe)) { throw "NcmToFlac.exe not found: $exe (build it first)" }
+$exe = Join-Path $root ('bin\x64\' + $Configuration + '\NcmConverter.exe')
+if (-not (Test-Path $exe)) { throw "NcmConverter.exe not found: $exe (build it first)" }
 
 $outDir = Join-Path $root 'docs\snapshot'
 if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }

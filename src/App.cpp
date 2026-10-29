@@ -47,26 +47,29 @@ void LogStatus(std::wstring const& directory, std::wstring const& message) {
     file.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
 }
 
-//   NcmToFlac.exe --convert <input.ncm> [output.flac]
+//   NcmConverter.exe --convert <input.ncm> [output.flac|output.mp3]
 // Drives the conversion core without the UI and reports the outcome as key=value
 // lines in "<output>.log". Exit code: 0 on success, 1 on failure, 2 on misuse.
 int RunHeadless(int argc, wchar_t** argv) {
     if (argc < 3) return 2;
 
     const std::wstring input = argv[2];
-    const std::wstring output = argc >= 4 ? std::wstring(argv[3]) : ncmlib::DefaultOutputPath(input);
+    // An empty output path means "next to the source"; the converter picks the
+    // extension from the stream it found inside the container.
+    const std::wstring output = argc >= 4 ? std::wstring(argv[3]) : std::wstring();
 
-    const ncmlib::ConvertOutcome outcome = ncmlib::ConvertNcmToFlac(input, output, true, {});
+    const ncmlib::ConvertOutcome outcome = ncmlib::ConvertNcm(input, output, true, {});
 
     std::wstring report;
     report += L"ok=" + std::wstring(outcome.ok ? L"true" : L"false") + L"\n";
     report += L"message=" + outcome.message + L"\n";
+    report += L"format=" + outcome.format + L"\n";
     report += L"output=" + outcome.outputPath + L"\n";
     report += L"bytes=" + std::to_wstring(outcome.bytes) + L"\n";
     report += L"title=" + outcome.title + L"\n";
     report += L"artist=" + outcome.artist + L"\n";
     report += L"summary=" + outcome.summary + L"\n";
-    WriteText(output + L".log", report);
+    WriteText((outcome.outputPath.empty() ? std::wstring(argv[2]) : outcome.outputPath) + L".log", report);
 
     return outcome.ok ? 0 : 1;
 }

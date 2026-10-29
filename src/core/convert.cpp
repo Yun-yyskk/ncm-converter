@@ -3,13 +3,13 @@
 #include "core/convert.h"
 
 #include "core/flac.h"
+#include "core/id3.h"
 #include "core/json.h"
 #include "core/lyrics.h"
 #include "core/ncm.h"
 
 #include <filesystem>
 #include <fstream>
-
 
 namespace ncmlib {
 namespace {
@@ -65,6 +65,30 @@ std::wstring FormatDuration(uint64_t totalSamples, uint32_t sampleRate) {
     return buffer;
 }
 
+std::wstring FormatSeconds(double seconds) {
+    if (seconds <= 0.0) return L"--:--";
+    const uint64_t totalSeconds = static_cast<uint64_t>(seconds + 0.5);
+    wchar_t buffer[32] = {};
+    swprintf_s(buffer, L"%02llu:%02llu", static_cast<unsigned long long>(totalSeconds / 60),
+               static_cast<unsigned long long>(totalSeconds % 60));
+    return buffer;
+}
+
+// Vorbis comments keep one ARTIST value per performer, ID3 keeps them in a
+// single slash-separated TPE1.
+std::vector<std::string> SplitArtists(const std::string& artists) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    while (start <= artists.size()) {
+        const size_t slash = artists.find('/', start);
+        const std::string single = slash == std::string::npos ? artists.substr(start) : artists.substr(start, slash - start);
+        if (!single.empty()) result.push_back(single);
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
+    return result;
+}
+
 std::vector<LyricLine> LoadLyrics(const std::string& metaJson, const std::wstring& inputPath) {
     std::vector<LyricLine> lines = ExtractLyrics(metaJson);
     if (!lines.empty()) return lines;
@@ -91,6 +115,21 @@ bool EnsureParentDirectory(const std::wstring& filePath) {
     return std::filesystem::exists(parent, ec);
 }
 
+bool WriteAll(const std::wstring& path, const std::vector<uint8_t>& bytes, std::wstring& error) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        error = L"无法写入输出文件，可能没有写入权限。";
+        return false;
+    }
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    file.close();
+    if (!file) {
+        error = L"写入输出文件时出错（磁盘空间不足？）。";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 std::wstring DefaultOutputPath(const std::wstring& inputPath) {
@@ -99,21 +138,9 @@ std::wstring DefaultOutputPath(const std::wstring& inputPath) {
     return path.wstring();
 }
 
-ConvertOutcome ConvertNcmToFlac(const std::wstring& inputPath, const std::wstring& outputPath, bool overwrite,
-                                const std::function<void(int)>& onProgress) {
+ConvertOutcome ConvertNcm(const std::wstring& inputPath, const std::wstring& outputPath, bool overwrite,
+                          const std::function<void(int)>& onProgress) {
     ConvertOutcome outcome;
-    outcome.outputPath = outputPath;
-
-    std::error_code ec;
-    if (!std::filesystem::exists(outputPath, ec)) {
-        if (!EnsureParentDirectory(outputPath)) {
-            outcome.message = L"无法创建输出目录。";
-            return outcome;
-        }
-    } else if (!overwrite) {
-        outcome.message = L"目标文件已存在（未开启覆盖）。";
-        return outcome;
-    }
 
     Report(onProgress, 4);
 
@@ -123,7 +150,28 @@ ConvertOutcome ConvertNcmToFlac(const std::wstring& inputPath, const std::wstrin
         outcome.message = error.empty() ? L"解析 NCM 失败。" : error;
         return outcome;
     }
+
+    const bool lossless = content.codec == AudioCodec::Flac;
+    outcome.format = lossless ? L"FLAC" : L"MP3";
     Report(onProgress, 26);
+
+    // The stream decides the container, so the name follows it rather than the
+    // other way round: a "song.flac" request for MPEG audio becomes "song.mp3".
+    std::filesystem::path target = outputPath.empty() ? std::filesystem::path(DefaultOutputPath(inputPath))
+                                                      : std::filesystem::path(outputPath);
+    target.replace_extension(lossless ? L".flac" : L".mp3");
+    outcome.outputPath = target.wstring();
+
+    std::error_code ec;
+    if (std::filesystem::exists(target, ec)) {
+        if (!overwrite) {
+            outcome.message = L"目标文件已存在（未开启覆盖）。";
+            return outcome;
+        }
+    } else if (!EnsureParentDirectory(outcome.outputPath)) {
+        outcome.message = L"无法创建输出目录。";
+        return outcome;
+    }
 
     bool metaOk = false;
     const Json meta = Json::Parse(content.metaJson, &metaOk);
@@ -158,41 +206,11 @@ ConvertOutcome ConvertNcmToFlac(const std::wstring& inputPath, const std::wstrin
         }
     }
     if (albumArtist.empty()) albumArtist = artists;
+    if (title.empty()) title = WideToUtf8(std::filesystem::path(inputPath).stem().wstring());
     Report(onProgress, 40);
-
-    FlacStreamInfo info;
-    if (!ReadFlacStreamInfo(content.audio, info)) {
-        outcome.message = L"FLAC 码流缺少有效的 STREAMINFO。";
-        return outcome;
-    }
-
-    std::vector<FlacTag> tags;
-    const std::wstring sourceName = std::filesystem::path(inputPath).stem().wstring();
-    if (title.empty()) title = WideToUtf8(sourceName);
-
-    tags.push_back({ "TITLE", title });
-    if (!artists.empty()) {
-        // One ARTIST entry per performer, matching how players group tracks.
-        size_t start = 0;
-        while (start <= artists.size()) {
-            const size_t slash = artists.find('/', start);
-            std::string single = slash == std::string::npos ? artists.substr(start) : artists.substr(start, slash - start);
-            if (!single.empty()) tags.push_back({ "ARTIST", single });
-            if (slash == std::string::npos) break;
-            start = slash + 1;
-        }
-    }
-    if (!album.empty()) tags.push_back({ "ALBUM", album });
-    if (!albumArtist.empty()) tags.push_back({ "ALBUMARTIST", albumArtist });
-    if (!translatedTitle.empty()) tags.push_back({ "TITLE_TRANSLATED", translatedTitle });
-    if (!musicId.empty()) tags.push_back({ "MUSIC_ID", musicId });
-    if (!comment.empty()) tags.push_back({ "COMMENT", comment });
 
     const std::vector<LyricLine> lyricLines = LoadLyrics(content.metaJson, inputPath);
     const std::string lrc = BuildLrcText(lyricLines);
-    if (!lrc.empty()) tags.push_back({ "LYRICS", lrc });
-    tags.push_back({ "ENCODER", "NcmToFlac 1.0 (WinUI 3)" });
-    Report(onProgress, 55);
 
     FlacPicture picture;
     bool hasPicture = false;
@@ -209,29 +227,81 @@ ConvertOutcome ConvertNcmToFlac(const std::wstring& inputPath, const std::wstrin
             picture.height = height;
             picture.depth = depth;
             picture.colors = colors;
-            picture.data = std::move(content.cover);
+            picture.data = content.cover;
             hasPicture = true;
         }
     }
     Report(onProgress, 65);
 
+    const std::string encoder = "NcmConverter 1.0 (WinUI 3)";
     std::vector<uint8_t> output;
-    std::wstring buildError;
-    if (!BuildTaggedFlac(content.audio, tags, hasPicture ? &picture : nullptr, output, info, buildError)) {
-        outcome.message = buildError.empty() ? L"写入 FLAC 标签失败。" : buildError;
-        return outcome;
+
+    if (lossless) {
+        FlacStreamInfo info;
+        if (!ReadFlacStreamInfo(content.audio, info)) {
+            outcome.message = L"FLAC 码流缺少有效的 STREAMINFO。";
+            return outcome;
+        }
+
+        std::vector<FlacTag> tags;
+        tags.push_back({ "TITLE", title });
+        for (auto const& single : SplitArtists(artists)) tags.push_back({ "ARTIST", single });
+        if (!album.empty()) tags.push_back({ "ALBUM", album });
+        if (!albumArtist.empty()) tags.push_back({ "ALBUMARTIST", albumArtist });
+        if (!translatedTitle.empty()) tags.push_back({ "TITLE_TRANSLATED", translatedTitle });
+        if (!musicId.empty()) tags.push_back({ "MUSIC_ID", musicId });
+        if (!comment.empty()) tags.push_back({ "COMMENT", comment });
+        if (!lrc.empty()) tags.push_back({ "LYRICS", lrc });
+        tags.push_back({ "ENCODER", encoder });
+        Report(onProgress, 55);
+
+        std::wstring buildError;
+        if (!BuildTaggedFlac(content.audio, tags, hasPicture ? &picture : nullptr, output, info, buildError)) {
+            outcome.message = buildError.empty() ? L"写入 FLAC 标签失败。" : buildError;
+            return outcome;
+        }
+
+        wchar_t summary[160] = {};
+        swprintf_s(summary, L"%.1f kHz · %u 声道 · %u bit · %s", info.sampleRate / 1000.0, info.channels,
+                   info.bitsPerSample, FormatDuration(info.totalSamples, info.sampleRate).c_str());
+        outcome.summary = summary;
+    } else {
+        Mp3StreamInfo info;
+        const bool probed = ProbeMp3(content.audio, info);
+
+        Mp3Tags tags;
+        tags.title = title;
+        tags.artist = artists;
+        tags.album = album;
+        tags.albumArtist = albumArtist;
+        tags.translatedTitle = translatedTitle;
+        tags.musicId = musicId;
+        tags.comment = comment;
+        tags.lyrics = lrc;
+        tags.encoder = encoder;
+        tags.cover = hasPicture ? &picture.data : nullptr;
+        tags.coverMime = hasPicture ? picture.mime : std::string();
+        Report(onProgress, 55);
+
+        std::wstring buildError;
+        if (!BuildTaggedMp3(content.audio, tags, output, buildError)) {
+            outcome.message = buildError.empty() ? L"写入 MP3 标签失败。" : buildError;
+            return outcome;
+        }
+
+        if (probed) {
+            wchar_t summary[160] = {};
+            swprintf_s(summary, L"%.1f kHz · %u 声道 · %u kbps · %s", info.sampleRate / 1000.0, info.channels,
+                       info.bitrateKbps, FormatSeconds(info.seconds).c_str());
+            outcome.summary = summary;
+        } else {
+            outcome.summary = L"MP3 码流";
+        }
     }
     Report(onProgress, 82);
 
-    std::ofstream file(outputPath, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        outcome.message = L"无法写入输出文件，可能没有写入权限。";
-        return outcome;
-    }
-    file.write(reinterpret_cast<const char*>(output.data()), static_cast<std::streamsize>(output.size()));
-    file.close();
-    if (!file) {
-        outcome.message = L"写入输出文件时出错（磁盘空间不足？）。";
+    if (!WriteAll(outcome.outputPath, output, error)) {
+        outcome.message = error;
         return outcome;
     }
 
@@ -239,12 +309,7 @@ ConvertOutcome ConvertNcmToFlac(const std::wstring& inputPath, const std::wstrin
     outcome.bytes = output.size();
     outcome.title = Utf8ToWide(title);
     outcome.artist = Utf8ToWide(artists);
-
-    wchar_t summary[128] = {};
-    swprintf_s(summary, L"%.1f kHz · %u 声道 · %u bit · %s", info.sampleRate / 1000.0, info.channels,
-               info.bitsPerSample, FormatDuration(info.totalSamples, info.sampleRate).c_str());
-    outcome.summary = summary;
-    outcome.message = L"转换完成";
+    outcome.message = lossless ? L"转换完成" : L"转换完成（MP3 码流，已按 MP3 保存）";
     Report(onProgress, 100);
     return outcome;
 }

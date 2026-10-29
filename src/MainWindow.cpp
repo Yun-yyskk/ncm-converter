@@ -507,6 +507,21 @@ Border MakeCard() {
     return card;
 }
 
+// WinUI's stock Button template swaps in its own pointer-over and pressed
+// brushes, so a plain hover flashes a flat grey block on our light cards.
+// Pinning the state brushes per button keeps the tint inside the palette.
+void ApplyButtonStateResources(Button const& button) {
+    ResourceDictionary resources = button.Resources();
+    const auto hover = static_cast<uint8_t>(g_palette.dark ? 0x12 : 0x0C);
+    const auto pressed = static_cast<uint8_t>(g_palette.dark ? 0x1E : 0x16);
+    resources.Insert(box_value(hstring(L"ButtonBackgroundPointerOver")), box_value(WhiteFill(hover)));
+    resources.Insert(box_value(hstring(L"ButtonBackgroundPressed")), box_value(WhiteFill(pressed)));
+    resources.Insert(box_value(hstring(L"ButtonBackgroundDisabled")), box_value(Solid(g_palette.card)));
+    resources.Insert(box_value(hstring(L"ButtonBorderBrushPointerOver")), box_value(Solid(g_palette.stroke)));
+    resources.Insert(box_value(hstring(L"ButtonBorderBrushPressed")), box_value(Solid(g_palette.stroke)));
+    resources.Insert(box_value(hstring(L"ButtonBorderBrushDisabled")), box_value(Solid(g_palette.stroke)));
+}
+
 Button MakeButton(Symbol symbol, std::wstring const& text) {
     StackPanel content;
     content.Orientation(Orientation::Horizontal);
@@ -535,6 +550,7 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
     button.FocusVisualPrimaryThickness(Thickness{ 2, 2, 2, 2 });
     button.FocusVisualPrimaryBrush(Solid(g_palette.accent));
     button.FocusVisualSecondaryThickness(Thickness{ 0, 0, 0, 0 });
+    ApplyButtonStateResources(button);
     return button;
 }
 
@@ -865,6 +881,7 @@ struct Item {
     TextBlock subtitleText{ nullptr };
     Border chip{ nullptr };
     TextBlock chipText{ nullptr };
+    Button remove{ nullptr };
     std::shared_ptr<LiteBar> bar;
 };
 
@@ -961,7 +978,7 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
 
 void MainWindow::Impl::Build() {
     window = Window();
-    window.Title(L"NCM 转 FLAC");
+    window.Title(L"NCM 转换");
     queue = DispatcherQueue::GetForCurrentThread();
 
     g_palette = MakePalette(SystemPrefersDark());
@@ -1001,7 +1018,7 @@ void MainWindow::Impl::Build() {
     Grid hero;
     hero.Margin(Thickness{ 0, 0, 0, 10 });
 
-    TextBlock heroTitle = MakeText(L"NCM 转 FLAC", 18, g_palette.textPrimary, true);
+    TextBlock heroTitle = MakeText(L"NCM 转换", 18, g_palette.textPrimary, true);
     hero.Children().Append(heroTitle);
 
     Grid::SetRow(hero, 0);
@@ -1552,6 +1569,10 @@ void MainWindow::Impl::ApplyPalette(bool dark) {
         if (!button) continue;
         button.Background(Solid(g_palette.card));
         button.BorderBrush(Solid(g_palette.stroke));
+        ApplyButtonStateResources(button);
+    }
+    for (auto const& item : items) {
+        if (item->remove) ApplyButtonStateResources(item->remove);
     }
 
     if (selectAll) selectAll->Repaint();
@@ -1705,6 +1726,7 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     remove.Padding(Thickness{ 3, 3, 3, 3 });
     remove.Background(Transparent());
     remove.BorderThickness(Thickness{ 0, 0, 0, 0 });
+    item->remove = remove;
     remove.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(remove, 4);
     layout.Children().Append(remove);
@@ -1782,6 +1804,7 @@ void MainWindow::Impl::UpdateOutputMode() {
     const bool enabled = customDirRadio->IsChecked();
     dirBox.Opacity(enabled ? 1.0 : 0.55);
     browseButton.IsEnabled(enabled);
+    browseButton.Opacity(enabled ? 1.0 : 0.55);
 }
 
 void MainWindow::Impl::SetInfo(std::wstring const& title, std::wstring const& message, NoticeKind kind) {
@@ -1887,7 +1910,7 @@ void MainWindow::Impl::StartConversion() {
             auto progress = [self, item](int percent) {
                 self->Post([self, item, percent]() { self->SetItemProgress(item, percent); });
             };
-            ncmlib::ConvertOutcome outcome = ncmlib::ConvertNcmToFlac(item->path, output, overwrite, progress);
+            ncmlib::ConvertOutcome outcome = ncmlib::ConvertNcm(item->path, output, overwrite, progress);
 
             ++done;
             if (outcome.ok) {

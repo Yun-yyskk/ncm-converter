@@ -15,8 +15,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <ProjectGuid>{A7F3C2E1-5B4D-4E39-9C1A-6D2B8E7F4A10}</ProjectGuid>
-    <RootNamespace>NcmToFlac</RootNamespace>
-    <ProjectName>NcmToFlac</ProjectName>
+    <RootNamespace>NcmConverter</RootNamespace>
+    <ProjectName>NcmConverter</ProjectName>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
@@ -62,7 +62,7 @@
   <PropertyGroup Label="Output">
     <OutDir>$(ProjectDir)bin\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
-    <TargetName>NcmToFlac</TargetName>
+    <TargetName>NcmConverter</TargetName>
     <LocalDebuggerWorkingDirectory>$(OutDir)</LocalDebuggerWorkingDirectory>
   </PropertyGroup>
 
