@@ -414,10 +414,10 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
     content.Spacing(5);
     content.VerticalAlignment(VerticalAlignment::Center);
 
-    FontIcon icon = MakeIcon(symbol, 12, g_palette.textPrimary);
+    FontIcon icon = MakeIcon(symbol, 14, g_palette.textPrimary);
     icon.VerticalAlignment(VerticalAlignment::Center);
 
-    TextBlock label = MakeText(text, 12, g_palette.textPrimary);
+    TextBlock label = MakeText(text, 14, g_palette.textPrimary);
     label.VerticalAlignment(VerticalAlignment::Center);
 
     content.Children().Append(icon);
@@ -429,8 +429,8 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
     button.BorderBrush(Solid(g_palette.stroke));
     button.BorderThickness(Thickness{ 1, 1, 1, 1 });
     button.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
-    button.Padding(Thickness{ 11, 4, 11, 4 });
-    button.MinHeight(30);
+    button.Padding(Thickness{ 12, 5, 14, 5 });
+    button.MinHeight(32);
     return button;
 }
 
@@ -726,7 +726,8 @@ void MainWindow::Impl::Build() {
     Grid content;
     content.Padding(Thickness{ 20, 4, 20, 16 });
     content.RowDefinitions().Append(RowAuto());  // hero
-    content.RowDefinitions().Append(RowStar());  // list
+    content.RowDefinitions().Append(RowAuto());  // list
+    content.RowDefinitions().Append(RowStar());  // slack
     content.RowDefinitions().Append(RowAuto());  // settings
     content.RowDefinitions().Append(RowAuto());  // info bar
     content.RowDefinitions().Append(RowAuto());  // footer
@@ -743,7 +744,7 @@ void MainWindow::Impl::Build() {
     TextBlock heroTitle = MakeText(L"NCM 转 FLAC", 20, g_palette.textPrimary, true);
     heroText.Children().Append(heroTitle);
 
-    TextBlock heroHint = MakeText(L"把网易云音乐的加密容器还原成无损 FLAC，封面、歌词与标签一并写入。", 11.5,
+    TextBlock heroHint = MakeText(L"把网易云音乐的加密容器还原成无损 FLAC，封面、歌词与标签一并写入。", 12,
                                   g_palette.textSecondary);
     heroHint.MaxWidth(600);
     heroText.Children().Append(heroHint);
@@ -755,6 +756,8 @@ void MainWindow::Impl::Build() {
     // file list card
     Border listCard = MakeCard();
     listCard.Padding(Thickness{ 14, 12, 14, 12 });
+    listCard.MinHeight(112);
+    listCard.MaxHeight(300);
     Grid::SetRow(listCard, 1);
     content.Children().Append(listCard);
 
@@ -774,9 +777,9 @@ void MainWindow::Impl::Build() {
     listTitleStack.Orientation(Orientation::Horizontal);
     listTitleStack.Spacing(8);
     listTitleStack.VerticalAlignment(VerticalAlignment::Center);
-    listTitleStack.Children().Append(MakeText(L"文件列表", 13, g_palette.textPrimary, true));
+    listTitleStack.Children().Append(MakeText(L"文件列表", 14, g_palette.textPrimary, true));
 
-    countText = MakeText(L"暂无文件", 11, g_palette.textTertiary);
+    countText = MakeText(L"暂无文件", 12, g_palette.textTertiary);
     countText.VerticalAlignment(VerticalAlignment::Center);
     listTitleStack.Children().Append(countText);
     listHeader.Children().Append(listTitleStack);
@@ -808,7 +811,6 @@ void MainWindow::Impl::Build() {
     listGrid.Children().Append(listHeader);
 
     Grid listHost;
-    listHost.MinHeight(120);
     Grid::SetRow(listHost, 1);
 
     ScrollViewer scroller;
@@ -828,15 +830,15 @@ void MainWindow::Impl::Build() {
     emptyState.VerticalAlignment(VerticalAlignment::Center);
     emptyState.IsHitTestVisible(false);
 
-    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 22, SurfaceInk(70));
+    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 26, SurfaceInk(70));
     emptyIcon.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyIcon);
 
-    TextBlock emptyTitle = MakeText(L"还没有文件", 12.5, g_palette.textSecondary, true);
+    TextBlock emptyTitle = MakeText(L"还没有文件", 13, g_palette.textSecondary, true);
     emptyTitle.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyTitle);
 
-    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 11, g_palette.textTertiary);
+    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 12, g_palette.textTertiary);
     emptyHint.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyHint);
 
@@ -846,7 +848,7 @@ void MainWindow::Impl::Build() {
     // output settings card
     Border settingsCard = MakeCard();
     settingsCard.Margin(Thickness{ 0, 10, 0, 0 });
-    Grid::SetRow(settingsCard, 2);
+    Grid::SetRow(settingsCard, 3);
     content.Children().Append(settingsCard);
 
     StackPanel settings;
@@ -856,19 +858,19 @@ void MainWindow::Impl::Build() {
     outputHeader.Orientation(Orientation::Horizontal);
     outputHeader.Spacing(4);
     outputHeader.VerticalAlignment(VerticalAlignment::Center);
-    outputHeader.Children().Append(MakeText(L"输出位置", 12, g_palette.textPrimary, true));
+    outputHeader.Children().Append(MakeText(L"输出位置", 14, g_palette.textPrimary, true));
 
     sameDirRadio = RadioButton();
     sameDirRadio.GroupName(L"output-mode");
     sameDirRadio.Content(box_value(hstring(L"与源文件同目录")));
     sameDirRadio.IsChecked(true);
     sameDirRadio.Margin(Thickness{ 0, 0, 10, 0 });
-    sameDirRadio.FontSize(12);
+    sameDirRadio.FontSize(14);
 
     customDirRadio = RadioButton();
     customDirRadio.GroupName(L"output-mode");
     customDirRadio.Content(box_value(hstring(L"指定目录")));
-    customDirRadio.FontSize(12);
+    customDirRadio.FontSize(14);
 
     StackPanel radioRow;
     radioRow.Orientation(Orientation::Horizontal);
@@ -887,8 +889,8 @@ void MainWindow::Impl::Build() {
     dirBox.Background(Solid(g_palette.card));
     dirBox.BorderBrush(Solid(g_palette.stroke));
     dirBox.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    dirBox.Padding(Thickness{ 10, 5, 10, 5 });
-    dirBox.MinHeight(30);
+    dirBox.Padding(Thickness{ 11, 6, 11, 6 });
+    dirBox.MinHeight(34);
     dirBox.Margin(Thickness{ 0, 0, 8, 0 });
     dirBox.VerticalAlignment(VerticalAlignment::Center);
     dirBox.Opacity(0.55);
@@ -897,11 +899,11 @@ void MainWindow::Impl::Build() {
     dirInner.ColumnDefinitions().Append(ColAuto());
     dirInner.ColumnDefinitions().Append(ColStar());
 
-    FontIcon dirIcon = MakeIcon(Symbol::Folder, 11, g_palette.textTertiary);
+    FontIcon dirIcon = MakeIcon(Symbol::Folder, 14, g_palette.textTertiary);
     dirIcon.Margin(Thickness{ 0, 1, 6, 0 });
     dirIcon.VerticalAlignment(VerticalAlignment::Center);
 
-    dirText = MakeText(L"点击选择输出目录", 11, g_palette.textTertiary);
+    dirText = MakeText(L"点击选择输出目录", 14, g_palette.textTertiary);
     dirText.TextTrimming(TextTrimming::CharacterEllipsis);
     dirText.TextWrapping(TextWrapping::NoWrap);
     dirText.VerticalAlignment(VerticalAlignment::Center);
@@ -912,6 +914,8 @@ void MainWindow::Impl::Build() {
     dirBox.Child(dirInner);
 
     browseButton = MakeButton(Symbol::Folder, L"浏览");
+    browseButton.MinHeight(34);
+    browseButton.VerticalAlignment(VerticalAlignment::Stretch);
     browseButton.IsEnabled(false);
     Grid::SetColumn(browseButton, 1);
 
@@ -923,7 +927,7 @@ void MainWindow::Impl::Build() {
     overwriteRow.Orientation(Orientation::Horizontal);
     overwriteRow.Spacing(10);
     overwriteRow.VerticalAlignment(VerticalAlignment::Center);
-    overwriteRow.Children().Append(MakeText(L"覆盖已存在的 FLAC", 12, g_palette.textPrimary));
+    overwriteRow.Children().Append(MakeText(L"覆盖已存在的 FLAC", 14, g_palette.textPrimary));
     overwriteSwitch = ToggleSwitch();
     overwriteSwitch.OnContent(box_value(hstring(L"")));
     overwriteSwitch.OffContent(box_value(hstring(L"")));
@@ -950,17 +954,17 @@ void MainWindow::Impl::Build() {
 
     bannerIcon = FontIcon();
     bannerIcon.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
-    bannerIcon.FontSize(12);
+    bannerIcon.FontSize(14);
     bannerIcon.Margin(Thickness{ 0, 1, 8, 0 });
     bannerIcon.VerticalAlignment(VerticalAlignment::Top);
 
     StackPanel bannerStack;
     bannerStack.Spacing(2);
 
-    bannerTitle = MakeText(L"", 11, g_palette.textPrimary, true);
+    bannerTitle = MakeText(L"", 12, g_palette.textPrimary, true);
     bannerTitle.Visibility(Visibility::Collapsed);
 
-    bannerText = MakeText(L"", 11, g_palette.textSecondary);
+    bannerText = MakeText(L"", 12, g_palette.textSecondary);
     bannerText.TextWrapping(TextWrapping::Wrap);
 
     bannerStack.Children().Append(bannerTitle);
@@ -971,7 +975,7 @@ void MainWindow::Impl::Build() {
     bannerInner.Children().Append(bannerStack);
     banner.Child(bannerInner);
 
-    Grid::SetRow(banner, 3);
+    Grid::SetRow(banner, 4);
     content.Children().Append(banner);
 
     // footer
@@ -980,14 +984,14 @@ void MainWindow::Impl::Build() {
     footer.ColumnDefinitions().Append(ColStar());
     footer.ColumnDefinitions().Append(ColAuto());
     footer.ColumnDefinitions().Append(ColAuto());
-    Grid::SetRow(footer, 4);
+    Grid::SetRow(footer, 5);
     content.Children().Append(footer);
 
     StackPanel statusStack;
     statusStack.Spacing(6);
     statusStack.VerticalAlignment(VerticalAlignment::Center);
 
-    statusText = MakeText(L"就绪 · 选择文件后开始转换", 11, g_palette.textSecondary);
+    statusText = MakeText(L"就绪 · 选择文件后开始转换", 12, g_palette.textSecondary);
     statusStack.Children().Append(statusText);
 
     overallBar = std::make_shared<LiteBar>(3, g_palette.accentAlt, 26);
@@ -1019,10 +1023,10 @@ void MainWindow::Impl::Build() {
     convertStack.Orientation(Orientation::Horizontal);
     convertStack.Spacing(7);
     convertStack.VerticalAlignment(VerticalAlignment::Center);
-    convertIcon = MakeIcon(Symbol::Play, 11, OnAccent(g_palette.accent));
+    convertIcon = MakeIcon(Symbol::Play, 13, OnAccent(g_palette.accent));
     convertStack.Children().Append(convertIcon);
 
-    convertLabel = MakeText(L"开始转换", 12.5, OnAccent(g_palette.accent), true);
+    convertLabel = MakeText(L"开始转换", 14, OnAccent(g_palette.accent), true);
     convertLabel.VerticalAlignment(VerticalAlignment::Center);
     convertStack.Children().Append(convertLabel);
     convertButton.Child(convertStack);
@@ -1268,7 +1272,7 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     row.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
     row.Background(Transparent());
     row.BorderThickness(Thickness{ 0, 0, 0, 0 });
-    row.Padding(Thickness{ 8, 6, 6, 6 });
+    row.Padding(Thickness{ 10, 7, 6, 7 });
     row.Margin(Thickness{ 0, 0, 0, 2 });
 
     Grid layout;
@@ -1287,11 +1291,11 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     layout.Children().Append(check);
 
     Border iconBorder;
-    iconBorder.Width(26);
-    iconBorder.Height(26);
+    iconBorder.Width(30);
+    iconBorder.Height(30);
     iconBorder.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
     iconBorder.Background(WhiteFill(12));
-    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 11, g_palette.textSecondary));
+    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 13, g_palette.textSecondary));
     iconBorder.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(iconBorder, 1);
     layout.Children().Append(iconBorder);
@@ -1300,11 +1304,11 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     textStack.Spacing(2);
     textStack.VerticalAlignment(VerticalAlignment::Center);
 
-    item->titleText = MakeText(item->name, 12.5, g_palette.textPrimary, true);
+    item->titleText = MakeText(item->name, 14, g_palette.textPrimary);
     item->titleText.TextWrapping(TextWrapping::NoWrap);
     item->titleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->subtitleText = MakeText(sizeText + L" · NCM", 11, g_palette.textTertiary);
+    item->subtitleText = MakeText(sizeText + L" · NCM", 12, g_palette.textTertiary);
     item->subtitleText.TextWrapping(TextWrapping::NoWrap);
     item->subtitleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
@@ -1320,10 +1324,10 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
 
     Border chip;
     chip.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
-    chip.Padding(Thickness{ 7, 2, 7, 2 });
+    chip.Padding(Thickness{ 8, 2, 8, 2 });
     chip.VerticalAlignment(VerticalAlignment::Center);
     chip.Background(WhiteFill(12));
-    item->chipText = MakeText(L"待转换", 10, g_palette.textSecondary);
+    item->chipText = MakeText(L"待转换", 12, g_palette.textSecondary);
     chip.Child(item->chipText);
     item->chip = chip;
     Grid::SetColumn(chip, 3);
