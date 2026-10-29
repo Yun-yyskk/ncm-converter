@@ -371,6 +371,8 @@ FontIcon MakeIcon(Symbol symbol, double size, winrt::Windows::UI::Color color) {
     icon.Glyph(GlyphFor(symbol));
     icon.FontSize(size);
     icon.Foreground(Solid(color));
+    icon.HorizontalAlignment(HorizontalAlignment::Center);
+    icon.VerticalAlignment(VerticalAlignment::Center);
     return icon;
 }
 
@@ -602,6 +604,148 @@ private:
     Border m_fill{ nullptr };
 };
 
+// CheckBox and RadioButton own a 20px glyph that cannot be resized without
+// retemplating, and retemplating is the code path that fail-fasts on this
+// machine. These two paint the same affordance at 16px from primitives.
+class LiteCheck {
+public:
+    explicit LiteCheck(double size = 16) {
+        m_root = Border();
+        m_root.Width(size);
+        m_root.Height(size);
+        m_root.CornerRadius(CornerRadius{ 3, 3, 3, 3 });
+        m_root.BorderThickness(Thickness{ 1, 1, 1, 1 });
+        m_root.HorizontalAlignment(HorizontalAlignment::Center);
+        m_root.VerticalAlignment(VerticalAlignment::Center);
+
+        m_tick = FontIcon();
+        m_tick.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
+        m_tick.Glyph(L"\uE73E");
+        m_tick.FontSize(10);
+        m_tick.HorizontalAlignment(HorizontalAlignment::Center);
+        m_tick.VerticalAlignment(VerticalAlignment::Center);
+        m_root.Child(m_tick);
+
+        // Mark the tap handled so a row that forwards taps to this box does not
+        // toggle it a second time on the way up the tree.
+        m_root.Tapped([this](Inspectable const&, TappedRoutedEventArgs const& args) {
+            Toggle();
+            args.Handled(true);
+        });
+        Paint();
+    }
+
+    Border Root() const { return m_root; }
+    bool IsChecked() const { return m_checked; }
+
+    void SetChecked(bool value) {
+        if (value == m_checked) return;
+        m_checked = value;
+        Paint();
+        if (m_onChange) m_onChange(m_checked);
+    }
+
+    void SetCheckedSilently(bool value) {
+        if (value == m_checked) {
+            Paint();
+            return;
+        }
+        m_checked = value;
+        Paint();
+    }
+
+    void SetEnabled(bool value) {
+        m_enabled = value;
+        m_root.Opacity(value ? 1.0 : 0.45);
+    }
+
+    void OnChange(std::function<void(bool)> handler) { m_onChange = std::move(handler); }
+    void Toggle() {
+        if (!m_enabled) return;
+        SetChecked(!m_checked);
+    }
+    void Repaint() { Paint(); }
+
+private:
+    void Paint() {
+        const auto outline = g_palette.dark ? Rgba(255, 255, 255, 120) : Rgba(0, 0, 0, 120);
+        m_root.Background(m_checked ? Solid(g_palette.accent) : Transparent());
+        m_root.BorderBrush(m_checked ? Solid(g_palette.accent) : Solid(outline));
+        m_tick.Foreground(Solid(OnAccent(g_palette.accent)));
+        m_tick.Visibility(m_checked ? Visibility::Visible : Visibility::Collapsed);
+    }
+
+    Border m_root{ nullptr };
+    FontIcon m_tick{ nullptr };
+    bool m_checked = false;
+    bool m_enabled = true;
+    std::function<void(bool)> m_onChange;
+};
+
+class LiteRadio {
+public:
+    explicit LiteRadio(double size = 16) : m_size(size) {
+        m_root = Border();
+        m_root.Width(size);
+        m_root.Height(size);
+        m_root.CornerRadius(CornerRadius{ size / 2, size / 2, size / 2, size / 2 });
+        m_root.BorderThickness(Thickness{ 1.5, 1.5, 1.5, 1.5 });
+        m_root.Background(Transparent());
+        m_root.HorizontalAlignment(HorizontalAlignment::Center);
+        m_root.VerticalAlignment(VerticalAlignment::Center);
+
+        m_dot = Border();
+        m_dot.Width(size * 0.44);
+        m_dot.Height(size * 0.44);
+        m_dot.CornerRadius(CornerRadius{ size, size, size, size });
+        m_dot.HorizontalAlignment(HorizontalAlignment::Center);
+        m_dot.VerticalAlignment(VerticalAlignment::Center);
+        m_dot.Background(Solid(g_palette.accent));
+        m_root.Child(m_dot);
+
+        m_root.Tapped([this](Inspectable const&, TappedRoutedEventArgs const& args) {
+            SetChecked(true);
+            args.Handled(true);
+        });
+        Paint();
+    }
+
+    Border Root() const { return m_root; }
+    bool IsChecked() const { return m_checked; }
+
+    void SetChecked(bool value) {
+        if (value == m_checked) return;
+        m_checked = value;
+        Paint();
+        if (m_onChange) m_onChange(m_checked);
+    }
+
+    void SetCheckedSilently(bool value) {
+        if (value == m_checked) {
+            Paint();
+            return;
+        }
+        m_checked = value;
+        Paint();
+    }
+
+    void OnChange(std::function<void(bool)> handler) { m_onChange = std::move(handler); }
+    void Repaint() { Paint(); }
+
+private:
+    void Paint() {
+        const auto outline = g_palette.dark ? Rgba(255, 255, 255, 120) : Rgba(0, 0, 0, 120);
+        m_root.BorderBrush(Solid(m_checked ? g_palette.accent : outline));
+        m_dot.Visibility(m_checked ? Visibility::Visible : Visibility::Collapsed);
+    }
+
+    Border m_root{ nullptr };
+    Border m_dot{ nullptr };
+    double m_size = 16;
+    bool m_checked = false;
+    std::function<void(bool)> m_onChange;
+};
+
 // Severity of the inline notice banner.
 enum class NoticeKind { Info, Success, Warning, Error };
 
@@ -614,7 +758,7 @@ struct Item {
     State state = State::Pending;
 
     Border row{ nullptr };
-    CheckBox check{ nullptr };
+    std::shared_ptr<LiteCheck> check;
     TextBlock titleText{ nullptr };
     TextBlock subtitleText{ nullptr };
     Border chip{ nullptr };
@@ -635,21 +779,28 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     StackPanel listPanel{ nullptr };
     StackPanel emptyState{ nullptr };
     TextBlock countText{ nullptr };
-    CheckBox selectAll{ nullptr };
+    std::shared_ptr<LiteCheck> selectAll;
     Button addButton{ nullptr };
     Button clearButton{ nullptr };
-    RadioButton sameDirRadio{ nullptr };
-    RadioButton customDirRadio{ nullptr };
+    std::shared_ptr<LiteRadio> sameDirRadio;
+    std::shared_ptr<LiteRadio> customDirRadio;
     Border dirBox{ nullptr };
     TextBlock dirText{ nullptr };
     Button browseButton{ nullptr };
-    ToggleSwitch overwriteSwitch{ nullptr };
     Border banner{ nullptr };
     FontIcon bannerIcon{ nullptr };
     TextBlock bannerTitle{ nullptr };
     TextBlock bannerText{ nullptr };
     std::shared_ptr<LiteBar> overallBar;
     TextBlock statusText{ nullptr };
+
+    // The footer only speaks while something is happening; an idle window shows
+    // no status line and no progress track at all.
+    void SetStatus(std::wstring const& text) {
+        if (!statusText) return;
+        statusText.Text(hstring(text));
+        statusText.Visibility(text.empty() ? Visibility::Collapsed : Visibility::Visible);
+    }
     Border convertButton{ nullptr };
     TextBlock convertLabel{ nullptr };
     bool convertEnabled = true;
@@ -659,7 +810,6 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     std::atomic<bool> running{ false };
     std::atomic<bool> closed{ false };
     bool syncingSelectAll = false;
-    bool syncingOutputMode = false;
     std::wstring lastOutputDirectory;
     std::vector<std::wstring> outputRoots;
     FontIcon brandIcon{ nullptr };
@@ -736,27 +886,17 @@ void MainWindow::Impl::Build() {
 
     // page header, Win11 settings style
     Grid hero;
-    hero.Margin(Thickness{ 2, 4, 2, 14 });
-    hero.ColumnDefinitions().Append(ColStar());
+    hero.Margin(Thickness{ 0, 0, 0, 10 });
 
-    StackPanel heroText;
-    heroText.Spacing(3);
-    TextBlock heroTitle = MakeText(L"NCM 转 FLAC", 20, g_palette.textPrimary, true);
-    heroText.Children().Append(heroTitle);
-
-    TextBlock heroHint = MakeText(L"把网易云音乐的加密容器还原成无损 FLAC，封面、歌词与标签一并写入。", 12,
-                                  g_palette.textSecondary);
-    heroHint.MaxWidth(600);
-    heroText.Children().Append(heroHint);
-    hero.Children().Append(heroText);
+    TextBlock heroTitle = MakeText(L"NCM 转 FLAC", 18, g_palette.textPrimary, true);
+    hero.Children().Append(heroTitle);
 
     Grid::SetRow(hero, 0);
     content.Children().Append(hero);
 
     // file list card
     Border listCard = MakeCard();
-    listCard.Padding(Thickness{ 14, 12, 14, 12 });
-    listCard.MinHeight(112);
+    listCard.MinHeight(96);
     listCard.MaxHeight(300);
     Grid::SetRow(listCard, 1);
     content.Children().Append(listCard);
@@ -771,30 +911,36 @@ void MainWindow::Impl::Build() {
     listHeader.ColumnDefinitions().Append(ColAuto());
     listHeader.ColumnDefinitions().Append(ColAuto());
     listHeader.ColumnDefinitions().Append(ColAuto());
-    listHeader.Margin(Thickness{ 2, 0, 2, 4 });
+    listHeader.Margin(Thickness{ 0, 0, 0, 6 });
 
     StackPanel listTitleStack;
     listTitleStack.Orientation(Orientation::Horizontal);
     listTitleStack.Spacing(8);
     listTitleStack.VerticalAlignment(VerticalAlignment::Center);
-    listTitleStack.Children().Append(MakeText(L"文件列表", 14, g_palette.textPrimary, true));
+    listTitleStack.Children().Append(MakeText(L"文件列表", 13, g_palette.textPrimary, true));
 
-    countText = MakeText(L"暂无文件", 12, g_palette.textTertiary);
+    countText = MakeText(L"暂无文件", 11.5, g_palette.textTertiary);
     countText.VerticalAlignment(VerticalAlignment::Center);
     listTitleStack.Children().Append(countText);
     listHeader.Children().Append(listTitleStack);
 
-    selectAll = CheckBox();
-    selectAll.Content(box_value(hstring(L"全选")));
-    selectAll.MinWidth(0);
-    selectAll.Margin(Thickness{ 0, 0, 8, 0 });
-    selectAll.VerticalAlignment(VerticalAlignment::Center);
-    // The stock focus visual is a hard black rectangle, which looks accidental
-    // on a card. Draw the keyboard cue in the accent colour instead.
-    selectAll.FocusVisualPrimaryThickness(Thickness{ 1, 1, 1, 1 });
-    selectAll.FocusVisualPrimaryBrush(Solid(g_palette.accent));
-    selectAll.FocusVisualSecondaryThickness(Thickness{ 0, 0, 0, 0 });
-    Grid::SetColumn(selectAll, 1);
+    selectAll = std::make_shared<LiteCheck>(16);
+    selectAll->OnChange([this](bool value) {
+        if (!syncingSelectAll) SetAllChecked(value);
+    });
+
+    StackPanel selectAllRow;
+    selectAllRow.Orientation(Orientation::Horizontal);
+    selectAllRow.Spacing(6);
+    selectAllRow.VerticalAlignment(VerticalAlignment::Center);
+    selectAllRow.Margin(Thickness{ 0, 0, 10, 0 });
+    selectAllRow.Children().Append(selectAll->Root());
+
+    TextBlock selectAllLabel = MakeText(L"全选", 12, g_palette.textSecondary);
+    selectAllLabel.VerticalAlignment(VerticalAlignment::Center);
+    selectAllRow.Children().Append(selectAllLabel);
+    selectAllRow.Tapped([this](Inspectable const&, TappedRoutedEventArgs const&) { selectAll->Toggle(); });
+    Grid::SetColumn(selectAllRow, 1);
 
     addButton = MakeButton(Symbol::Add, L"添加文件");
     addButton.Margin(Thickness{ 0, 0, 8, 0 });
@@ -803,7 +949,7 @@ void MainWindow::Impl::Build() {
     clearButton = MakeButton(Symbol::Delete, L"清空");
     Grid::SetColumn(clearButton, 3);
 
-    listHeader.Children().Append(selectAll);
+    listHeader.Children().Append(selectAllRow);
     listHeader.Children().Append(addButton);
     listHeader.Children().Append(clearButton);
 
@@ -838,17 +984,13 @@ void MainWindow::Impl::Build() {
     emptyTitle.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyTitle);
 
-    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 12, g_palette.textTertiary);
-    emptyHint.HorizontalAlignment(HorizontalAlignment::Center);
-    emptyState.Children().Append(emptyHint);
-
     listHost.Children().Append(emptyState);
     listGrid.Children().Append(listHost);
 
     // output settings card
     Border settingsCard = MakeCard();
     settingsCard.Margin(Thickness{ 0, 10, 0, 0 });
-    Grid::SetRow(settingsCard, 3);
+    Grid::SetRow(settingsCard, 2);
     content.Children().Append(settingsCard);
 
     StackPanel settings;
@@ -858,25 +1000,42 @@ void MainWindow::Impl::Build() {
     outputHeader.Orientation(Orientation::Horizontal);
     outputHeader.Spacing(4);
     outputHeader.VerticalAlignment(VerticalAlignment::Center);
-    outputHeader.Children().Append(MakeText(L"输出位置", 14, g_palette.textPrimary, true));
+    outputHeader.Children().Append(MakeText(L"输出位置", 13, g_palette.textPrimary, true));
 
-    sameDirRadio = RadioButton();
-    sameDirRadio.GroupName(L"output-mode");
-    sameDirRadio.Content(box_value(hstring(L"与源文件同目录")));
-    sameDirRadio.IsChecked(true);
-    sameDirRadio.Margin(Thickness{ 0, 0, 10, 0 });
-    sameDirRadio.FontSize(14);
+    sameDirRadio = std::make_shared<LiteRadio>(16);
+    sameDirRadio->SetCheckedSilently(true);
+    customDirRadio = std::make_shared<LiteRadio>(16);
+    sameDirRadio->OnChange([this](bool value) {
+        if (!value) return;
+        customDirRadio->SetCheckedSilently(false);
+        UpdateOutputMode();
+    });
+    customDirRadio->OnChange([this](bool value) {
+        if (!value) return;
+        sameDirRadio->SetCheckedSilently(false);
+        UpdateOutputMode();
+    });
 
-    customDirRadio = RadioButton();
-    customDirRadio.GroupName(L"output-mode");
-    customDirRadio.Content(box_value(hstring(L"指定目录")));
-    customDirRadio.FontSize(14);
+    auto makeRadioLabel = [this](std::shared_ptr<LiteRadio> const& radio, std::wstring const& text) {
+        StackPanel row;
+        row.Orientation(Orientation::Horizontal);
+        row.Spacing(6);
+        row.VerticalAlignment(VerticalAlignment::Center);
+        row.Children().Append(radio->Root());
+        TextBlock label = MakeText(text, 12.5, g_palette.textPrimary);
+        label.VerticalAlignment(VerticalAlignment::Center);
+        row.Children().Append(label);
+        row.Tapped([radio](Inspectable const&, TappedRoutedEventArgs const&) { radio->SetChecked(true); });
+        return row;
+    };
 
     StackPanel radioRow;
     radioRow.Orientation(Orientation::Horizontal);
-    radioRow.Spacing(2);
-    radioRow.Children().Append(sameDirRadio);
-    radioRow.Children().Append(customDirRadio);
+    radioRow.Spacing(18);
+    radioRow.Margin(Thickness{ 14, 0, 0, 0 });
+    radioRow.VerticalAlignment(VerticalAlignment::Center);
+    radioRow.Children().Append(makeRadioLabel(sameDirRadio, L"源文件所在目录"));
+    radioRow.Children().Append(makeRadioLabel(customDirRadio, L"指定目录"));
     outputHeader.Children().Append(radioRow);
     settings.Children().Append(outputHeader);
 
@@ -889,8 +1048,8 @@ void MainWindow::Impl::Build() {
     dirBox.Background(Solid(g_palette.card));
     dirBox.BorderBrush(Solid(g_palette.stroke));
     dirBox.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    dirBox.Padding(Thickness{ 11, 6, 11, 6 });
-    dirBox.MinHeight(34);
+    dirBox.Padding(Thickness{ 10, 5, 10, 7 });
+    dirBox.MinHeight(32);
     dirBox.Margin(Thickness{ 0, 0, 8, 0 });
     dirBox.VerticalAlignment(VerticalAlignment::Center);
     dirBox.Opacity(0.55);
@@ -899,11 +1058,11 @@ void MainWindow::Impl::Build() {
     dirInner.ColumnDefinitions().Append(ColAuto());
     dirInner.ColumnDefinitions().Append(ColStar());
 
-    FontIcon dirIcon = MakeIcon(Symbol::Folder, 14, g_palette.textTertiary);
-    dirIcon.Margin(Thickness{ 0, 1, 6, 0 });
+    FontIcon dirIcon = MakeIcon(Symbol::Folder, 12, g_palette.textTertiary);
+    dirIcon.Margin(Thickness{ 0, 0, 6, 0 });
     dirIcon.VerticalAlignment(VerticalAlignment::Center);
 
-    dirText = MakeText(L"点击选择输出目录", 14, g_palette.textTertiary);
+    dirText = MakeText(L"未选择目录", 12.5, g_palette.textTertiary);
     dirText.TextTrimming(TextTrimming::CharacterEllipsis);
     dirText.TextWrapping(TextWrapping::NoWrap);
     dirText.VerticalAlignment(VerticalAlignment::Center);
@@ -914,28 +1073,14 @@ void MainWindow::Impl::Build() {
     dirBox.Child(dirInner);
 
     browseButton = MakeButton(Symbol::Folder, L"浏览");
-    browseButton.MinHeight(34);
-    browseButton.VerticalAlignment(VerticalAlignment::Stretch);
+    browseButton.MinHeight(32);
+    browseButton.VerticalAlignment(VerticalAlignment::Center);
     browseButton.IsEnabled(false);
     Grid::SetColumn(browseButton, 1);
 
     dirRow.Children().Append(dirBox);
     dirRow.Children().Append(browseButton);
     settings.Children().Append(dirRow);
-
-    StackPanel overwriteRow;
-    overwriteRow.Orientation(Orientation::Horizontal);
-    overwriteRow.Spacing(10);
-    overwriteRow.VerticalAlignment(VerticalAlignment::Center);
-    overwriteRow.Children().Append(MakeText(L"覆盖已存在的 FLAC", 14, g_palette.textPrimary));
-    overwriteSwitch = ToggleSwitch();
-    overwriteSwitch.OnContent(box_value(hstring(L"")));
-    overwriteSwitch.OffContent(box_value(hstring(L"")));
-    overwriteSwitch.MinWidth(0);
-    overwriteSwitch.MinHeight(0);
-    overwriteSwitch.IsOn(false);
-    overwriteRow.Children().Append(overwriteSwitch);
-    settings.Children().Append(overwriteRow);
 
     settingsCard.Child(settings);
 
@@ -991,13 +1136,14 @@ void MainWindow::Impl::Build() {
     statusStack.Spacing(6);
     statusStack.VerticalAlignment(VerticalAlignment::Center);
 
-    statusText = MakeText(L"就绪 · 选择文件后开始转换", 12, g_palette.textSecondary);
+    statusText = MakeText(L"", 11.5, g_palette.textSecondary);
+    statusText.Visibility(Visibility::Collapsed);
     statusStack.Children().Append(statusText);
 
     overallBar = std::make_shared<LiteBar>(3, g_palette.accentAlt, 26);
-    overallBar->Root().Width(280);
-    overallBar->Root().MaxWidth(280);
-    overallBar->Root().HorizontalAlignment(HorizontalAlignment::Left);
+    overallBar->Root().HorizontalAlignment(HorizontalAlignment::Stretch);
+    overallBar->Root().Margin(Thickness{ 0, 0, 20, 0 });
+    overallBar->SetVisibility(Visibility::Collapsed);
     statusStack.Children().Append(overallBar->Root());
 
     footer.Children().Append(statusStack);
@@ -1013,8 +1159,8 @@ void MainWindow::Impl::Build() {
     // our control (the stock AccentButtonStyle uses the system accent colour).
     convertButton = Border();
     convertButton.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
-    convertButton.Padding(Thickness{ 16, 0, 18, 0 });
-    convertButton.MinWidth(128);
+    convertButton.Padding(Thickness{ 18, 0, 20, 0 });
+    convertButton.MinWidth(120);
     convertButton.Height(32);
     convertButton.Background(Solid(g_palette.accent));
     convertButton.VerticalAlignment(VerticalAlignment::Center);
@@ -1043,7 +1189,7 @@ void MainWindow::Impl::Build() {
     }
 
     const double scale = GetDpiForSystem() / 96.0;
-    window.AppWindow().Resize({ static_cast<int32_t>(700 * scale), static_cast<int32_t>(450 * scale) });
+    window.AppWindow().Resize({ static_cast<int32_t>(640 * scale), static_cast<int32_t>(360 * scale) });
 
     root.ActualThemeChanged([this](FrameworkElement const&, Inspectable const&) { SyncTheme(); });
 
@@ -1053,20 +1199,9 @@ void MainWindow::Impl::Build() {
         listPanel.Children().Clear();
         ClearInfo();
         overallBar->SetPercent(0);
-        statusText.Text(hstring(L"就绪 · 选择文件后开始转换"));
+        SetStatus(L"");
         RefreshCounters();
     });
-
-    selectAll.Checked([this](Inspectable const&, RoutedEventArgs const&) {
-        if (!syncingSelectAll) SetAllChecked(true);
-    });
-    selectAll.Unchecked([this](Inspectable const&, RoutedEventArgs const&) {
-        if (!syncingSelectAll) SetAllChecked(false);
-    });
-
-    sameDirRadio.Checked([this](Inspectable const&, RoutedEventArgs const&) { UpdateOutputMode(); });
-    sameDirRadio.Unchecked([this](Inspectable const&, RoutedEventArgs const&) { UpdateOutputMode(); });
-    customDirRadio.Checked([this](Inspectable const&, RoutedEventArgs const&) { UpdateOutputMode(); });
 
     auto chooseDirectory = [this]() {
         auto picked = PickPaths(true, L"选择输出目录");
@@ -1074,11 +1209,8 @@ void MainWindow::Impl::Build() {
         customDirectory = picked.front();
         dirText.Text(hstring(customDirectory));
         dirText.Foreground(Solid(g_palette.textPrimary));
-        if (auto checked = customDirRadio.IsChecked(); !checked || !checked.Value()) {
-            syncingOutputMode = true;
-            customDirRadio.IsChecked(true);
-            syncingOutputMode = false;
-        }
+        customDirRadio->SetCheckedSilently(true);
+        sameDirRadio->SetCheckedSilently(false);
         UpdateOutputMode();
     };
     browseButton.Click([chooseDirectory](Inspectable const&, RoutedEventArgs const&) { chooseDirectory(); });
@@ -1125,7 +1257,7 @@ void MainWindow::Impl::InstallDropSupport() {
 
         if (added > 0) {
             ClearInfo();
-            statusText.Text(hstring(L"已添加 " + std::to_wstring(added) + L" 个文件"));
+            SetStatus(L"");
             RefreshCounters();
         } else {
             SetInfo(L"没有可用的文件", L"拖进来的内容里没有 .ncm 文件，或者已经在列表中了。", NoticeKind::Info);
@@ -1193,6 +1325,21 @@ void MainWindow::Impl::ApplyPalette(bool dark) {
     if (convertIcon) convertIcon.Foreground(Solid(ink));
     if (brandIcon) brandIcon.Foreground(Solid(Rgba(255, 255, 255)));
 
+    // Native buttons carry their face on the Control, not on a Border, so the
+    // visual-tree walk below never reaches it; repaint the four we own.
+    for (Button const& button : { addButton, clearButton, browseButton, openFolderButton }) {
+        if (!button) continue;
+        button.Background(Solid(g_palette.card));
+        button.BorderBrush(Solid(g_palette.stroke));
+    }
+
+    if (selectAll) selectAll->Repaint();
+    if (sameDirRadio) sameDirRadio->Repaint();
+    if (customDirRadio) customDirRadio->Repaint();
+    for (auto const& item : items) {
+        if (item->check) item->check->Repaint();
+    }
+
     RecolorItemChips();
     ClearInfo();
     ApplyNativeTitlebarTheme();
@@ -1238,7 +1385,7 @@ void MainWindow::Impl::AddFilesFromDialog() {
     }
     if (added > 0) {
         ClearInfo();
-        statusText.Text(hstring(L"已添加 " + std::to_wstring(added) + L" 个文件"));
+        SetStatus(L"");
     } else {
         SetInfo(L"没有可用的文件", L"选中的内容里没有 .ncm 文件，或者已经在列表中了。", NoticeKind::Info);
     }
@@ -1272,8 +1419,8 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     row.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
     row.Background(Transparent());
     row.BorderThickness(Thickness{ 0, 0, 0, 0 });
-    row.Padding(Thickness{ 10, 7, 6, 7 });
-    row.Margin(Thickness{ 0, 0, 0, 2 });
+    row.Padding(Thickness{ 0, 4, 0, 4 });
+    row.Margin(Thickness{ 0, 0, 0, 1 });
 
     Grid layout;
     layout.ColumnDefinitions().Append(ColAuto());
@@ -1283,19 +1430,17 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     layout.ColumnDefinitions().Append(ColAuto());
     layout.ColumnSpacing(8);
 
-    CheckBox check;
-    check.MinWidth(20);
-    check.VerticalAlignment(VerticalAlignment::Center);
-    check.IsChecked(true);
+    auto check = std::make_shared<LiteCheck>(16);
+    check->SetCheckedSilently(true);
     item->check = check;
-    layout.Children().Append(check);
+    layout.Children().Append(check->Root());
 
     Border iconBorder;
-    iconBorder.Width(30);
-    iconBorder.Height(30);
+    iconBorder.Width(26);
+    iconBorder.Height(26);
     iconBorder.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
     iconBorder.Background(WhiteFill(12));
-    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 13, g_palette.textSecondary));
+    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 12, g_palette.textSecondary));
     iconBorder.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(iconBorder, 1);
     layout.Children().Append(iconBorder);
@@ -1304,11 +1449,11 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     textStack.Spacing(2);
     textStack.VerticalAlignment(VerticalAlignment::Center);
 
-    item->titleText = MakeText(item->name, 14, g_palette.textPrimary);
+    item->titleText = MakeText(item->name, 13, g_palette.textPrimary);
     item->titleText.TextWrapping(TextWrapping::NoWrap);
     item->titleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->subtitleText = MakeText(sizeText + L" · NCM", 12, g_palette.textTertiary);
+    item->subtitleText = MakeText(sizeText + L" · NCM", 11.5, g_palette.textTertiary);
     item->subtitleText.TextWrapping(TextWrapping::NoWrap);
     item->subtitleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
@@ -1324,10 +1469,10 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
 
     Border chip;
     chip.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
-    chip.Padding(Thickness{ 8, 2, 8, 2 });
+    chip.Padding(Thickness{ 7, 1, 7, 1 });
     chip.VerticalAlignment(VerticalAlignment::Center);
     chip.Background(WhiteFill(12));
-    item->chipText = MakeText(L"待转换", 12, g_palette.textSecondary);
+    item->chipText = MakeText(L"待转换", 11, g_palette.textSecondary);
     chip.Child(item->chipText);
     item->chip = chip;
     Grid::SetColumn(chip, 3);
@@ -1356,10 +1501,7 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     remove.Click([weak, item](Inspectable const&, RoutedEventArgs const&) {
         if (auto self = weak.lock()) self->RemoveItem(item);
     });
-    check.Checked([weak](Inspectable const&, RoutedEventArgs const&) {
-        if (auto self = weak.lock()) self->RefreshCounters();
-    });
-    check.Unchecked([weak](Inspectable const&, RoutedEventArgs const&) {
+    check->OnChange([weak](bool) {
         if (auto self = weak.lock()) self->RefreshCounters();
     });
 
@@ -1382,7 +1524,7 @@ void MainWindow::Impl::RemoveItem(std::shared_ptr<Item> const& item) {
 void MainWindow::Impl::SetAllChecked(bool checked) {
     for (auto const& item : items) {
         syncingSelectAll = true;
-        item->check.IsChecked(checked);
+        item->check->SetCheckedSilently(checked);
         syncingSelectAll = false;
     }
     RefreshCounters();
@@ -1391,23 +1533,22 @@ void MainWindow::Impl::SetAllChecked(bool checked) {
 void MainWindow::Impl::RefreshCounters() {
     int selected = 0;
     for (auto const& item : items) {
-        auto state = item->check.IsChecked();
-        if (state && state.Value()) ++selected;
+        if (item->check->IsChecked()) ++selected;
     }
 
     if (items.empty()) {
         countText.Text(hstring(L"暂无文件"));
     } else {
-        countText.Text(hstring(std::to_wstring(items.size()) + L" 个文件 · 已选 " + std::to_wstring(selected) + L" 个"));
+        countText.Text(hstring(std::to_wstring(items.size()) + L" 个文件"));
     }
 
     syncingSelectAll = true;
-    selectAll.IsChecked(items.empty() ? false : (selected == static_cast<int>(items.size())));
+    selectAll->SetCheckedSilently(!items.empty() && selected == static_cast<int>(items.size()));
     syncingSelectAll = false;
 
     emptyState.Visibility(items.empty() ? Visibility::Visible : Visibility::Collapsed);
     SetConvertEnabled(!items.empty() && !running.load());
-    selectAll.IsEnabled(!items.empty());
+    selectAll->SetEnabled(!items.empty());
 }
 
 void MainWindow::Impl::SetConvertEnabled(bool enabled) {
@@ -1416,9 +1557,7 @@ void MainWindow::Impl::SetConvertEnabled(bool enabled) {
 }
 
 void MainWindow::Impl::UpdateOutputMode() {
-    if (syncingOutputMode) return;
-    auto custom = customDirRadio.IsChecked();
-    const bool enabled = custom && custom.Value();
+    const bool enabled = customDirRadio->IsChecked();
     dirBox.Opacity(enabled ? 1.0 : 0.55);
     browseButton.IsEnabled(enabled);
 }
@@ -1473,16 +1612,14 @@ void MainWindow::Impl::StartConversion() {
 
     std::vector<std::shared_ptr<Item>> targets;
     for (auto const& item : items) {
-        auto state = item->check.IsChecked();
-        if (state && state.Value()) targets.push_back(item);
+        if (item->check->IsChecked()) targets.push_back(item);
     }
     if (targets.empty()) {
         SetInfo(L"没有选中文件", L"请至少勾选一个文件再开始转换。", NoticeKind::Warning);
         return;
     }
 
-    bool sameDirectory = true;
-    if (auto custom = customDirRadio.IsChecked(); custom && custom.Value()) sameDirectory = false;
+    const bool sameDirectory = !customDirRadio->IsChecked();
 
     std::wstring outputDirectory;
     if (!sameDirectory) {
@@ -1501,14 +1638,15 @@ void MainWindow::Impl::StartConversion() {
         }
     }
 
-    const bool overwrite = overwriteSwitch.IsOn();
+    const bool overwrite = true;
 
     ClearInfo();
     running = true;
     SetConvertEnabled(false);
     openFolderButton.Visibility(Visibility::Collapsed);
     overallBar->SetPercent(0);
-    statusText.Text(hstring(L"准备转换…"));
+    overallBar->SetVisibility(Visibility::Visible);
+    SetStatus(L"准备转换…");
 
     auto self = shared_from_this();
     const int total = static_cast<int>(targets.size());
@@ -1557,7 +1695,7 @@ void MainWindow::Impl::SetItemRunning(std::shared_ptr<Item> const& item) {
     SetChip(*item, L"转换中", g_palette.warning, Tint(g_palette.warning, 40));
     item->bar->SetVisibility(Visibility::Visible);
     item->bar->SetPercent(0);
-    statusText.Text(hstring(L"正在转换：" + item->name));
+    SetStatus(L"正在转换：" + item->name);
 }
 
 void MainWindow::Impl::SetItemProgress(std::shared_ptr<Item> const& item, int percent) {
@@ -1589,7 +1727,7 @@ void MainWindow::Impl::FinishItem(std::shared_ptr<Item> const& item, ncmlib::Con
         item->subtitleText.Text(hstring(outcome.message.empty() ? L"转换失败" : outcome.message));
     }
 
-    statusText.Text(hstring(L"进度 " + std::to_wstring(done) + L" / " + std::to_wstring(total)));
+    SetStatus(L"进度 " + std::to_wstring(done) + L" / " + std::to_wstring(total));
 }
 
 void MainWindow::Impl::FinishAll(int done, int total, int succeeded, std::vector<std::wstring> const& outputDirectories) {
@@ -1615,7 +1753,9 @@ void MainWindow::Impl::FinishAll(int done, int total, int succeeded, std::vector
     }
 
     if (outputDirectories.size() > 1) summary += L" · 已写入各自的源目录";
-    statusText.Text(hstring(summary));
+    SetStatus(summary);
+    overallBar->SetPercent(100);
+    overallBar->SetVisibility(Visibility::Collapsed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1735,6 +1875,6 @@ void MainWindow::AddPaths(std::vector<std::wstring> const& paths) {
     }
     if (added > 0) {
         m_impl->ClearInfo();
-        m_impl->statusText.Text(hstring(L"已添加 " + std::to_wstring(added) + L" 个文件"));
+        m_impl->SetStatus(L"");
     }
 }
