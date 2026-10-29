@@ -29,4 +29,22 @@ cmd /c $cmd
 if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
 $exe = Join-Path $root ("bin\x64\" + $Configuration + "\NcmConverter.exe")
-if (Test-Path $exe) { Write-Host "OK -> $exe" } else { throw "Build did not produce $exe" }
+if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
+
+# The project links against the dynamic CRT, so a plain copy of bin\x64\<cfg>
+# fails to start on a machine without the Visual C++ redistributable. Ship the
+# runtime next to the executable instead of asking the user to install it.
+$crt = Get-ChildItem (Join-Path $vsRoot 'VC\Redist\MSVC') -Directory -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending |
+    ForEach-Object { Get-ChildItem $_.FullName -Directory -Filter 'x64' -ErrorAction SilentlyContinue } |
+    ForEach-Object { Get-ChildItem $_.FullName -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue } |
+    Select-Object -First 1
+if ($crt) {
+    $binDir = Split-Path -Parent $exe
+    Get-ChildItem $crt.FullName -File -Filter '*.dll' | Copy-Item -Destination $binDir -Force
+    Write-Host ("CRT -> " + $crt.FullName)
+} else {
+    Write-Warning 'VC++ redistributable DLLs not found; the output folder will not be portable.'
+}
+
+Write-Host "OK -> $exe"

@@ -45,12 +45,51 @@ powershell -ExecutionPolicy Bypass -File tools\fetch-packages.ps1
 powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 ```
 
-产物：`bin\x64\Release\NcmConverter.exe`，同目录带上 Windows App SDK 运行库 DLL，可整体拷走使用。
+产物：`bin\x64\Release\NcmConverter.exe`，同目录带上 Windows App SDK 运行库 DLL；
+`build.ps1` 还会把 VC++ 运行库（`msvcp140.dll` / `vcruntime140.dll` / `vcruntime140_1.dll` 等）
+从 `Microsoft.VC145.CRT` 拷进来，所以整个文件夹可以原样拷到别的电脑上运行。
 
 > 没有走 `msbuild -t:Restore`：Build Tools 里不带 NuGet.targets，所以由
 > `tools\fetch-packages.ps1` 按 nuspec 递归抓包、解压到标准 NuGet 目录，
 > vcxproj 里再用显式 `Import` 引用。换机器时改 vcxproj 顶部的 `PlatformToolset`、
 > `WindowsTargetPlatformVersion` 与 `PackageVersions` 组即可。
+
+## 分发（便携版）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\package.ps1 -Configuration Release
+```
+
+产物 `dist\NcmConverter-win-x64.zip`（约 20 MB），`dist\NcmConverter-win-x64\` 是未压缩的同一份文件夹。
+
+包里的东西让它在别的电脑上"解压即用"，什么都不用装：
+
+- **VC++ 运行库**：`msvcp140.dll` / `vcruntime140.dll` / `vcruntime140_1.dll` 等与 exe 同目录
+  （app-local 部署），目标机不需要装 Visual C++ 运行库；
+- **Windows App SDK**：自包含部署，框架 DLL 与 `.pri` 都在包里，同样不需要安装；
+- **使用说明.txt** 与 **解除锁定.cmd**，处理下面这个问题。
+
+系统要求只有一条：Windows 10 1809（17763）及以上的 64 位 Windows。
+
+### 双击后弹出「Windows 已保护你的电脑」
+
+这是 SmartScreen 对**带「来自 Internet」标记（MOTW）**的可执行文件给出的提示。标记是下载或
+用资源管理器解压 zip 时由 Windows 自己写进文件的（NTFS 的 `Zone.Identifier` 数据流），
+与程序本身有没有问题无关——本机直接双击同一个 exe 就不会弹窗，因为它没有这个标记：
+
+```text
+PS> Get-Item bin\x64\Release\NcmConverter.exe -Stream *
+:$DATA        ...
+```
+
+去掉标记即可，不需要证书、也不需要改注册表：
+
+- 右键 `NcmConverter.exe` → 属性 → 勾选「解除锁定」→ 确定；
+- 或者双击包里的 `解除锁定.cmd`，它对整个目录执行 `Unblock-File`；
+- 或者别用资源管理器解压：用 7-Zip / WinRAR 解压，或从 U 盘、局域网共享整目录拷过去，
+  文件不会带上这个标记，双击直接开。
+
+想让提示对任何机器都彻底消失，只能买代码签名证书（EV 证书才有一开始就有的信誉），这里不做。
 
 ## 使用
 
@@ -114,6 +153,7 @@ comment / USLT(歌词) / APIC(封面)。
 | `src/App.cpp` | 启动、命令行模式与两个开发钩子 |
 | `tools/fetch-packages.ps1` | 递归下载 Windows App SDK 依赖包 |
 | `tools/screenshot.ps1` | 走 `--ui-snapshot` 渲染窗口到 `docs/preview.png` |
+| `tools/package.ps1` | 打便携 zip：校验运行库、加使用说明、压缩到 `dist` |
 
 ## 实现说明：界面为什么是"手搓控件"
 
