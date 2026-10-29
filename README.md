@@ -10,7 +10,7 @@
 - **批量转换**：把 .ncm 拖进窗口任意位置，或用「添加文件」多选；支持全选 / 逐个移除
 - **输出目录**：默认写回**每个文件自己的源目录**（文件来自不同文件夹时各归各位），
   也可统一指定一个目录
-- **覆盖开关**：目标文件已存在时默认跳过，打开开关后覆盖
+- **直接覆盖**：目标文件已存在时直接重写，不再多问一句
 - **跟随系统主题**：浅色 / 深色跟随 Windows，强调色固定为 Windows 11 的默认蓝（浅色 #005FB8 / 深色 #60CDFF）；系统切换主题时
   窗口会实时重绘（包括标题栏）
 - **一键打开目录**：转换完成后直接跳到输出位置（输出分散在多个目录时跳到它们的公共上层）
@@ -54,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 3. 选输出位置（默认写回各文件自己的源目录，可改为统一目录）
 4. 点「开始转换」，状态胶囊从「待转换」变成「完成」
 
-窗口默认尺寸 700 × 450，会按系统 DPI 缩放。
+窗口默认尺寸 640 × 360，会按系统 DPI 缩放。
 
 ## NCM 容器的解包流程
 
@@ -123,12 +123,19 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 修复方式有两条：改成 framework-dependent 部署（依赖机器上已装的 Windows App Runtime），
 或者干脆不用那四个控件。这里选后者——**进度条、目录输入框、提示横幅都改成 `Border` + `Grid`
 自绘**（见 `MainWindow.cpp` 里的 `LiteBar`），换来零运行时依赖，配色与主题也完全可控。
+
+同一处限制还带来两个自绘控件：原生 `CheckBox` / `RadioButton` 的勾选图形固定 20 × 20，
+想改小只能改模板，而模板正好走上面那条 fail-fast 路径。所以列表里的复选框和两个输出模式
+单选按钮是 16 px 的 `LiteCheck` / `LiteRadio`（`Border` + `FontIcon`），尺寸、圆角、
+强调色都跟着调色板走。
 界面本身同样是代码式构建（`ApplicationT<App>` + `Window()` + 直接装配控件），
 完全绕开 XAML 编译器与 `XamlTypeInfo` 生成。
 
-主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色、取系统强调色生成调色板；
-之后 `ActualThemeChanged` 与 `UISettings.ColorValuesChanged` 触发重绘（逐控件重映射画刷，
-不重建界面）。
+主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色并生成调色板，之后
+`ActualThemeChanged` 触发重绘（逐控件重映射画刷，不重建界面）；自绘控件另有
+`Repaint()` 一起换色。强调色不取系统强调色——它经常是棕色或橙色，和这里的图标、
+进度条不搭——固定用 Windows 11 的默认蓝（浅色 `#005FB8` / 深色 `#60CDFF`），
+前景文字再按 WCAG 对比度自动选黑或白。
 
 ## 开发与调试钩子
 
