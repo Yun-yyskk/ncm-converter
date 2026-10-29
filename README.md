@@ -7,10 +7,13 @@
 
 ## 功能
 
-- **批量转换**：拖放文件到窗口任意位置，或用「添加文件」多选；支持全选 / 逐个移除
-- **输出目录**：默认与源文件同目录，也可指定目录
+- **批量转换**：把 .ncm 拖进窗口任意位置，或用「添加文件」多选；支持全选 / 逐个移除
+- **输出目录**：默认写回**每个文件自己的源目录**（文件来自不同文件夹时各归各位），
+  也可统一指定一个目录
 - **覆盖开关**：目标文件已存在时默认跳过，打开开关后覆盖
-- **一键打开目录**：转换完成后直接跳到输出位置
+- **跟随系统主题**：浅色 / 深色跟随 Windows，配色取自系统强调色；系统切换主题或换强调色时
+  窗口会实时重绘（包括标题栏）
+- **一键打开目录**：转换完成后直接跳到输出位置（输出分散在多个目录时跳到它们的公共上层）
 - **完整标签**：TITLE / ARTIST / ALBUM / ALBUMARTIST / TITLE_TRANSLATED / MUSIC_ID /
   COMMENT / LYRICS / ENCODER 顺序写入 VORBIS_COMMENT
 - **封面嵌入**：把 NCM 内嵌的专辑图作为 PICTURE 块（front cover）写进 FLAC
@@ -48,8 +51,10 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
 1. 运行 `NcmToFlac.exe`
 2. 把 `.ncm` 文件拖进窗口，或点「添加文件」多选
-3. 选输出位置（默认与源文件同目录）
+3. 选输出位置（默认写回各文件自己的源目录，可改为统一目录）
 4. 点「开始转换」，状态胶囊从「待转换」变成「完成」
+
+窗口默认尺寸 900 × 620，会按系统 DPI 缩放。
 
 ## NCM 容器的解包流程
 
@@ -93,20 +98,45 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 | `src/core/lyrics.*` | LRC / YRC / JSON 歌词统一成标准 LRC |
 | `src/core/convert.*` | 单文件转换编排（进度回调、覆盖策略、错误文案） |
 | `src/MainWindow.*` | WinUI 3 界面（纯 C++ 构建，无 XAML、无代码生成） |
-| `src/App.cpp` | 启动、命令行模式、截图测试钩子 |
+| `src/App.cpp` | 启动、命令行模式与两个开发钩子 |
 | `tools/fetch-packages.ps1` | 递归下载 Windows App SDK 依赖包 |
 | `tools/screenshot.ps1` | 走 `--ui-snapshot` 渲染窗口到 `docs/preview.png` |
 
 ## 实现说明：界面为什么是"手搓控件"
 
-目标机器上 WinUI 3（1.8）的 `ProgressBar`、`TextBox`、`InfoBar`、`ProgressRing`
-渲染时 fail-fast 崩溃（`0xC000027B`，在 `Microsoft.UI.Xaml.dll` 内 `E_FAIL`），
-而 `Border`、`Button`、`CheckBox`、`ScrollViewer`、`ComboBox`、`ToggleSwitch`、
-`AcrylicBrush` 全都正常。
+WinUI 3 的控件默认样式不在 DLL 里，而在框架资源包（`Microsoft.UI.Xaml.Controls.pri`）中，
+以 XBF 形式挂在下面这个 URI 上；自包含部署（`WindowsAppSDKSelfContained=true`）时这份资源
+没有被合并进应用的 `resources.pri`，于是第一次用到依赖它的控件就会失败：
 
-于是进度条、目录输入框、提示横幅都改成 `Border` + `Grid` 自绘（见 `MainWindow.cpp` 里的
-`LiteBar`），颜色可控也顺便避免了系统主题渗色。界面本身同样是代码式构建
-（`ApplicationT<App>` + `Window()` + 直接装配控件），完全绕开 XAML 编译器与 `XamlTypeInfo` 生成。
+```text
+Cannot load DefaultStyleResourceUri 'ms-appx:///Microsoft.UI.Xaml/Themes/generic.xaml'
+for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
+```
+
+这个异常在 XAML 内部被升级成 fail-fast（`0xC000027B`，`Microsoft.UI.Xaml.dll` 内 `E_FAIL`），
+进程直接死，`try/catch` 和 `UnhandledException` 都接不到——表面上就是"程序一闪而退"。
+受影响的只有样式走 `DefaultStyleResourceUri` 的控件，即 `ProgressBar`、`ProgressRing`、
+`TextBox`、`InfoBar`；而 `Border`、`Button`、`CheckBox`、`RadioButton`、`ToggleSwitch`、
+`Slider`、`ComboBox`、`ScrollViewer`、`ItemsControl`、`HyperlinkButton` 的样式由框架内置，
+全部正常。
+
+修复方式有两条：改成 framework-dependent 部署（依赖机器上已装的 Windows App Runtime），
+或者干脆不用那四个控件。这里选后者——**进度条、目录输入框、提示横幅都改成 `Border` + `Grid`
+自绘**（见 `MainWindow.cpp` 里的 `LiteBar`），换来零运行时依赖，配色与主题也完全可控。
+界面本身同样是代码式构建（`ApplicationT<App>` + `Window()` + 直接装配控件），
+完全绕开 XAML 编译器与 `XamlTypeInfo` 生成。
+
+主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色、取系统强调色生成调色板；
+之后 `ActualThemeChanged` 与 `UISettings.ColorValuesChanged` 触发重绘（逐控件重映射画刷，
+不重建界面）。
+
+## 开发与调试钩子
+
+| 命令 | 用途 |
+| --- | --- |
+| `NcmToFlac.exe --convert in.ncm [out.flac]` | 无界面转换，结果写 `<out>.log` |
+| `NcmToFlac.exe --ui-snapshot <目录> [文件...]` | 渲染窗口到 `ui.png` + 视觉树 `ui-tree.txt` 后退出 |
+| `NcmToFlac.exe --ui-run <目录> [文件...]` | 同上，但先跑一次完整转换，验证界面链路 |
 
 ## 许可
 
