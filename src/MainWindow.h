@@ -21,6 +21,10 @@ public:
     // "open with", shell "send to"). Must be called on the UI thread.
     void AddPaths(std::vector<std::wstring> const& paths);
 
+    // Development hook: kicks off the conversion exactly like the primary
+    // button does, so the full GUI pipeline can be exercised headlessly.
+    void RunConversionNow();
+
     // Test hook: renders the window content to a PNG and dumps the live visual
     // tree (element sizes and text) next to it. Used by tools/snapshot.ps1.
     winrt::Windows::Foundation::IAsyncAction SaveSnapshot(std::wstring pngPath, std::wstring treePath);

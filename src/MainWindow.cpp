@@ -7,7 +7,17 @@
 #include <shellapi.h>
 #include <shobjidl_core.h>
 
+#include <commctrl.h>
+#include <dwmapi.h>
+
+#include <winrt/Windows.UI.ViewManagement.h>
+
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "dwmapi.lib")
+
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -32,39 +42,264 @@ using Inspectable = winrt::Windows::Foundation::IInspectable;
 namespace {
 
 // ---------------------------------------------------------------------------
-// Palette. The window runs on a dark Mica backdrop, so these are tuned for it.
+// Palette. Colours follow the Windows light/dark preference and the accent
+// colour, so the window looks native on every machine.
 // ---------------------------------------------------------------------------
 winrt::Windows::UI::Color Rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) {
     return winrt::Windows::UI::ColorHelper::FromArgb(a, r, g, b);
 }
 
-const winrt::Windows::UI::Color kTextPrimary = Rgba(243, 244, 248);
-const winrt::Windows::UI::Color kTextSecondary = Rgba(160, 165, 180);
-const winrt::Windows::UI::Color kTextTertiary = Rgba(118, 123, 140);
-const winrt::Windows::UI::Color kAccentA = Rgba(255, 92, 106);
-const winrt::Windows::UI::Color kAccentB = Rgba(255, 150, 74);
-const winrt::Windows::UI::Color kSuccess = Rgba(122, 226, 148);
-const winrt::Windows::UI::Color kDanger = Rgba(255, 138, 138);
-const winrt::Windows::UI::Color kWarning = Rgba(255, 203, 112);
-const winrt::Windows::UI::Color kIdle = Rgba(150, 156, 172);
+struct Palette {
+    bool dark = false;
+    winrt::Windows::UI::Color surface{};
+    winrt::Windows::UI::Color textPrimary{};
+    winrt::Windows::UI::Color textSecondary{};
+    winrt::Windows::UI::Color textTertiary{};
+    winrt::Windows::UI::Color accent{};
+    winrt::Windows::UI::Color accentAlt{};
+    winrt::Windows::UI::Color success{};
+    winrt::Windows::UI::Color danger{};
+    winrt::Windows::UI::Color warning{};
+};
+
+Palette g_palette;
+
+uint8_t Blend(uint8_t value, double amount) {
+    const double mixed = static_cast<double>(value) + (255.0 - static_cast<double>(value)) * amount;
+    if (mixed < 0.0) return 0;
+    if (mixed > 255.0) return 255;
+    return static_cast<uint8_t>(mixed);
+}
+
+winrt::Windows::UI::Color Lighten(winrt::Windows::UI::Color color, double amount) {
+    return Rgba(Blend(color.R, amount), Blend(color.G, amount), Blend(color.B, amount), color.A);
+}
+
+winrt::Windows::UI::Color Tint(winrt::Windows::UI::Color color, uint8_t alpha) {
+    return Rgba(color.R, color.G, color.B, alpha);
+}
+
+winrt::Windows::UI::Color SystemAccent() {
+    try {
+        winrt::Windows::UI::ViewManagement::UISettings settings;
+        const auto accent = settings.GetColorValue(winrt::Windows::UI::ViewManagement::UIColorType::Accent);
+        if (accent.A != 0) return accent;
+    } catch (...) {
+    }
+    return Rgba(0x00, 0x63, 0xB8);
+}
+
+bool SystemPrefersDark() {
+    try {
+        winrt::Windows::UI::ViewManagement::UISettings settings;
+        const auto background = settings.GetColorValue(winrt::Windows::UI::ViewManagement::UIColorType::Background);
+        const double luminance = 0.299 * background.R + 0.587 * background.G + 0.114 * background.B;
+        return luminance < 128.0;
+    } catch (...) {
+        return false;
+    }
+}
+
+Palette MakePalette(bool dark) {
+    Palette palette;
+    palette.dark = dark;
+    palette.accent = SystemAccent();
+    // The second gradient stop moves away from the background, so the accent
+    // keeps its bite on a light surface instead of washing out.
+    palette.accentAlt = Lighten(palette.accent, dark ? 0.30 : -0.28);
+    if (dark) {
+        palette.surface = Rgba(32, 32, 32);
+        palette.textPrimary = Rgba(255, 255, 255);
+        palette.textSecondary = Rgba(198, 198, 198);
+        palette.textTertiary = Rgba(144, 144, 144);
+        palette.success = Rgba(108, 203, 95);
+        palette.danger = Rgba(255, 153, 164);
+        palette.warning = Rgba(252, 225, 0);
+    } else {
+        palette.surface = Rgba(243, 243, 243);
+        palette.textPrimary = Rgba(26, 26, 26);
+        palette.textSecondary = Rgba(94, 94, 94);
+        palette.textTertiary = Rgba(126, 126, 126);
+        palette.success = Rgba(15, 123, 15);
+        palette.danger = Rgba(196, 43, 28);
+        palette.warning = Rgba(157, 93, 0);
+    }
+    return palette;
+}
+
+double LinearChannel(uint8_t channel) {
+    const double value = channel / 255.0;
+    return value <= 0.03928 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+}
+
+// Ink for labels drawn on top of the accent fill. Uses the WCAG luminance
+// cut-off, so pale accents (yellow, light blue) get dark text instead of
+// unreadable white.
+winrt::Windows::UI::Color OnAccent(winrt::Windows::UI::Color accent) {
+    const double luminance =
+        0.2126 * LinearChannel(accent.R) + 0.7152 * LinearChannel(accent.G) + 0.0722 * LinearChannel(accent.B);
+    return luminance > 0.179 ? Rgba(20, 20, 20) : Rgba(255, 255, 255);
+}
+
+bool SameColor(winrt::Windows::UI::Color a, winrt::Windows::UI::Color b) {
+    return a.A == b.A && a.R == b.R && a.G == b.G && a.B == b.B;
+}
 
 SolidColorBrush Solid(winrt::Windows::UI::Color const& color) { return SolidColorBrush(color); }
-SolidColorBrush WhiteFill(uint8_t alpha) { return SolidColorBrush(Rgba(255, 255, 255, alpha)); }
 SolidColorBrush Transparent() { return SolidColorBrush(Rgba(0, 0, 0, 0)); }
+
+// Faint surface used for cards, rows and dividers. It is derived from the
+// foreground ink, so one alpha value reads correctly in both themes.
+winrt::Windows::UI::Color SurfaceInk(uint8_t alpha) {
+    if (g_palette.dark) return Rgba(255, 255, 255, alpha);
+    return Rgba(0, 0, 0, static_cast<uint8_t>(std::min<int>(255, alpha + 10)));
+}
+
+SolidColorBrush WhiteFill(uint8_t alpha) { return SolidColorBrush(SurfaceInk(alpha)); }
 
 LinearGradientBrush AccentGradient() {
     LinearGradientBrush brush;
     brush.StartPoint(Point{ 0.0f, 0.0f });
     brush.EndPoint(Point{ 1.0f, 1.0f });
     GradientStop first;
-    first.Color(kAccentA);
+    first.Color(g_palette.accent);
     first.Offset(0.0);
     GradientStop second;
-    second.Color(kAccentB);
+    second.Color(g_palette.accentAlt);
     second.Offset(1.0);
     brush.GradientStops().Append(first);
     brush.GradientStops().Append(second);
     return brush;
+}
+
+// Recolours brushes that were painted with the previous palette. Colours are
+// matched exactly against the palette entries; translucent white or black
+// fills flip their ink when the theme changes.
+winrt::Windows::UI::Color RemapColor(winrt::Windows::UI::Color color, Palette const& from, Palette const& to) {
+    if (SameColor(color, from.surface)) return to.surface;
+    if (SameColor(color, from.textPrimary)) return to.textPrimary;
+    if (SameColor(color, from.textSecondary)) return to.textSecondary;
+    if (SameColor(color, from.textTertiary)) return to.textTertiary;
+    if (SameColor(color, from.accent)) return to.accent;
+    if (SameColor(color, from.accentAlt)) return to.accentAlt;
+    if (SameColor(color, from.success)) return to.success;
+    if (SameColor(color, from.danger)) return to.danger;
+    if (SameColor(color, from.warning)) return to.warning;
+    if (from.dark == to.dark || color.A == 0xFF) return color;
+
+    const bool paleInk = color.R > 200 && color.G > 200 && color.B > 200;
+    const bool darkInk = color.R < 40 && color.G < 40 && color.B < 40;
+    if (paleInk || darkInk) {
+        const uint8_t ink = to.dark ? 255 : 0;
+        return Rgba(ink, ink, ink, color.A);
+    }
+    return color;
+}
+
+void RecolorBrush(Brush const& brush, Palette const& from, Palette const& to) {
+    if (!brush) return;
+    if (auto solid = brush.try_as<SolidColorBrush>()) {
+        const auto current = solid.Color();
+        const auto remapped = RemapColor(current, from, to);
+        if (!SameColor(current, remapped)) solid.Color(remapped);
+        return;
+    }
+    if (auto gradient = brush.try_as<LinearGradientBrush>()) {
+        const auto stops = gradient.GradientStops();
+        if (stops.Size() == 2) {
+            stops.GetAt(0).Color(to.accent);
+            stops.GetAt(1).Color(to.accentAlt);
+        }
+    }
+}
+
+void RecolorTree(DependencyObject const& node, Palette const& from, Palette const& to) {
+    if (!node) return;
+    if (auto text = node.try_as<TextBlock>()) {
+        RecolorBrush(text.Foreground(), from, to);
+    } else if (auto icon = node.try_as<FontIcon>()) {
+        RecolorBrush(icon.Foreground(), from, to);
+    } else if (auto border = node.try_as<Border>()) {
+        RecolorBrush(border.Background(), from, to);
+        RecolorBrush(border.BorderBrush(), from, to);
+    } else if (auto grid = node.try_as<Grid>()) {
+        RecolorBrush(grid.Background(), from, to);
+    }
+
+    const int count = Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int index = 0; index < count; ++index) {
+        RecolorTree(Media::VisualTreeHelper::GetChild(node, index), from, to);
+    }
+}
+
+// Explorer still turns a drop over a window that accepted files through
+// DragAcceptFiles into WM_DROPFILES, so the shell drop path is handled at the
+// HWND level instead of through the XAML drag/drop API.
+std::function<void(std::vector<std::wstring> const&)> g_filesDropped;
+std::vector<HWND> g_dropWindows;
+
+LRESULT CALLBACK DropSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+    if (message != WM_DROPFILES) return DefSubclassProc(hwnd, message, wParam, lParam);
+
+    auto drop = reinterpret_cast<HDROP>(wParam);
+    std::vector<std::wstring> paths;
+
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    for (UINT index = 0; index < count; ++index) {
+        const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+        if (length == 0) continue;
+        std::wstring path(length, L'\0');
+        if (DragQueryFileW(drop, index, path.data(), length + 1) != 0) {
+            path.resize(length);
+            paths.push_back(std::move(path));
+        }
+    }
+    DragFinish(drop);
+
+    if (!paths.empty() && g_filesDropped) g_filesDropped(paths);
+    return 0;
+}
+
+void RegisterDropWindow(HWND hwnd) {
+    if (!hwnd) return;
+    for (HWND registered : g_dropWindows) {
+        if (registered == hwnd) return;
+    }
+    DragAcceptFiles(hwnd, TRUE);
+    SetWindowSubclass(hwnd, DropSubclassProc, 1, 0);
+    g_dropWindows.push_back(hwnd);
+}
+
+// The drop target has to be on the HWND that actually sits under the cursor,
+// and WinUI creates its content child windows asynchronously, so the scan runs
+// again a moment after the window is up.
+void RegisterDropTree(HWND hwnd) {
+    RegisterDropWindow(hwnd);
+    EnumChildWindows(
+        hwnd,
+        [](HWND child, LPARAM) -> BOOL {
+            RegisterDropWindow(child);
+            return TRUE;
+        },
+        0);
+}
+
+// Deepest folder that still contains every converted file, used by the
+// "open folder" button when the outputs ended up in different directories.
+std::wstring CommonDirectory(std::vector<std::wstring> const& directories) {
+    if (directories.empty()) return {};
+    std::wstring common = directories.front();
+    for (size_t index = 1; index < directories.size(); ++index) {
+        const std::wstring& other = directories[index];
+        const size_t limit = (std::min)(common.size(), other.size());
+        size_t shared = 0;
+        while (shared < limit && towlower(common[shared]) == towlower(other[shared])) ++shared;
+        common.resize(shared);
+        const size_t separator = common.find_last_of(L"\\/");
+        common.resize(separator == std::wstring::npos ? 0 : separator);
+        if (common.empty()) return {};
+    }
+    return common;
 }
 
 TextBlock MakeText(std::wstring const& value, double size, winrt::Windows::UI::Color color, bool semibold = false) {
@@ -144,10 +379,10 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
     content.Spacing(7);
     content.VerticalAlignment(VerticalAlignment::Center);
 
-    FontIcon icon = MakeIcon(symbol, 14, kTextPrimary);
+    FontIcon icon = MakeIcon(symbol, 14, g_palette.textPrimary);
     icon.VerticalAlignment(VerticalAlignment::Center);
 
-    TextBlock label = MakeText(text, 13, kTextPrimary);
+    TextBlock label = MakeText(text, 13, g_palette.textPrimary);
     label.VerticalAlignment(VerticalAlignment::Center);
 
     content.Children().Append(icon);
@@ -387,6 +622,11 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     bool syncingSelectAll = false;
     bool syncingOutputMode = false;
     std::wstring lastOutputDirectory;
+    std::vector<std::wstring> outputRoots;
+    FontIcon brandIcon{ nullptr };
+    FontIcon convertIcon{ nullptr };
+    winrt::Windows::UI::ViewManagement::UISettings uiSettings{ nullptr };
+    winrt::event_token accentToken{};
     std::wstring customDirectory;
 
     void Build();
@@ -405,14 +645,18 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     void SetItemRunning(std::shared_ptr<Item> const& item);
     void SetItemProgress(std::shared_ptr<Item> const& item, int percent);
     void FinishItem(std::shared_ptr<Item> const& item, ncmlib::ConvertOutcome const& outcome, int done, int total);
-    void FinishAll(int done, int total, int succeeded, std::wstring const& lastDirectory);
+    void FinishAll(int done, int total, int succeeded, std::vector<std::wstring> const& outputDirectories);
 
     void SetChip(Item& item, std::wstring const& text, winrt::Windows::UI::Color foreground,
                  winrt::Windows::UI::Color background);
 
     void Post(std::function<void()> action);
 
-    winrt::fire_and_forget OnDrop(Inspectable const& sender, DragEventArgs const& args);
+    void InstallDropSupport();
+    void ApplyPalette(bool dark);
+    void SyncTheme();
+    void ApplyNativeTitlebarTheme();
+    void RecolorItemChips();
 };
 
 void MainWindow::Impl::Build() {
@@ -420,14 +664,14 @@ void MainWindow::Impl::Build() {
     window.Title(L"NCM 转 FLAC");
     queue = DispatcherQueue::GetForCurrentThread();
 
+    g_palette = MakePalette(SystemPrefersDark());
+
     root = Grid();
-    root.RequestedTheme(ElementTheme::Dark);
-    // Opaque window surface: keeps the dark palette readable even when the
-    // desktop backdrop would be light (or when nothing is composited at all).
-    root.Background(Solid(Rgba(16, 17, 23)));
+    root.RequestedTheme(ElementTheme::Default);
+    // Opaque window surface: keeps the palette readable over any backdrop.
+    root.Background(Solid(g_palette.surface));
     root.RowDefinitions().Append(RowAuto());   // custom title bar
     root.RowDefinitions().Append(RowStar());   // content
-    root.AllowDrop(true);
 
     // ----- title bar --------------------------------------------------------
     Grid titleBar;
@@ -447,10 +691,11 @@ void MainWindow::Impl::Build() {
     brandBadge.Height(24);
     brandBadge.CornerRadius(CornerRadius{ 7, 7, 7, 7 });
     brandBadge.Background(AccentGradient());
-    brandBadge.Child(MakeIcon(Symbol::MusicInfo, 11, Rgba(255, 255, 255)));
+    brandIcon = MakeIcon(Symbol::MusicInfo, 11, Rgba(255, 255, 255));
+    brandBadge.Child(brandIcon);
     brand.Children().Append(brandBadge);
 
-    TextBlock brandText = MakeText(L"NCM 转 FLAC", 12, kTextSecondary);
+    TextBlock brandText = MakeText(L"NCM 转 FLAC", 12, g_palette.textSecondary);
     brandText.VerticalAlignment(VerticalAlignment::Center);
     brand.Children().Append(brandText);
 
@@ -478,7 +723,7 @@ void MainWindow::Impl::Build() {
     StackPanel heroText;
     heroText.Spacing(6);
     heroText.VerticalAlignment(VerticalAlignment::Center);
-    TextBlock heroTitle = MakeText(L"", 25, kTextPrimary, true);
+    TextBlock heroTitle = MakeText(L"", 25, g_palette.textPrimary, true);
     {
         auto inlines = heroTitle.Inlines();
         winrt::Microsoft::UI::Xaml::Documents::Run prefix;
@@ -502,7 +747,7 @@ void MainWindow::Impl::Build() {
     heroText.Children().Append(heroTitle);
 
     TextBlock heroHint = MakeText(L"读取网易云音乐的加密容器，输出标准 FLAC —— 封面、歌词与标签一并写入。", 13,
-                                  kTextSecondary);
+                                  g_palette.textSecondary);
     heroHint.MaxWidth(640);
     heroText.Children().Append(heroHint);
     hero.Children().Append(heroText);
@@ -542,9 +787,9 @@ void MainWindow::Impl::Build() {
     listTitleStack.Orientation(Orientation::Horizontal);
     listTitleStack.Spacing(10);
     listTitleStack.VerticalAlignment(VerticalAlignment::Center);
-    listTitleStack.Children().Append(MakeText(L"文件列表", 14, kTextPrimary, true));
+    listTitleStack.Children().Append(MakeText(L"文件列表", 14, g_palette.textPrimary, true));
 
-    countText = MakeText(L"暂无文件", 12, kTextTertiary);
+    countText = MakeText(L"暂无文件", 12, g_palette.textTertiary);
     countText.VerticalAlignment(VerticalAlignment::Center);
     listTitleStack.Children().Append(countText);
     listHeader.Children().Append(listTitleStack);
@@ -554,6 +799,11 @@ void MainWindow::Impl::Build() {
     selectAll.MinWidth(0);
     selectAll.Margin(Thickness{ 0, 0, 8, 0 });
     selectAll.VerticalAlignment(VerticalAlignment::Center);
+    // The stock focus visual is a hard black rectangle, which looks accidental
+    // on a card. Draw the keyboard cue in the accent colour instead.
+    selectAll.FocusVisualPrimaryThickness(Thickness{ 2, 2, 2, 2 });
+    selectAll.FocusVisualPrimaryBrush(Solid(g_palette.accent));
+    selectAll.FocusVisualSecondaryThickness(Thickness{ 0, 0, 0, 0 });
     Grid::SetColumn(selectAll, 1);
 
     addButton = MakeButton(Symbol::Add, L"添加文件");
@@ -591,15 +841,15 @@ void MainWindow::Impl::Build() {
     emptyState.VerticalAlignment(VerticalAlignment::Center);
     emptyState.IsHitTestVisible(false);
 
-    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 30, Rgba(255, 255, 255, 70));
+    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 30, SurfaceInk(70));
     emptyIcon.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyIcon);
 
-    TextBlock emptyTitle = MakeText(L"还没有文件", 14, kTextSecondary, true);
+    TextBlock emptyTitle = MakeText(L"还没有文件", 14, g_palette.textSecondary, true);
     emptyTitle.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyTitle);
 
-    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 12, kTextTertiary);
+    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 12, g_palette.textTertiary);
     emptyHint.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyHint);
 
@@ -619,7 +869,7 @@ void MainWindow::Impl::Build() {
     outputHeader.Orientation(Orientation::Horizontal);
     outputHeader.Spacing(4);
     outputHeader.VerticalAlignment(VerticalAlignment::Center);
-    outputHeader.Children().Append(MakeText(L"输出位置", 13, kTextPrimary, true));
+    outputHeader.Children().Append(MakeText(L"输出位置", 13, g_palette.textPrimary, true));
 
     sameDirRadio = RadioButton();
     sameDirRadio.GroupName(L"output-mode");
@@ -656,11 +906,11 @@ void MainWindow::Impl::Build() {
     dirInner.ColumnDefinitions().Append(ColAuto());
     dirInner.ColumnDefinitions().Append(ColStar());
 
-    FontIcon dirIcon = MakeIcon(Symbol::Folder, 13, kTextTertiary);
+    FontIcon dirIcon = MakeIcon(Symbol::Folder, 13, g_palette.textTertiary);
     dirIcon.Margin(Thickness{ 0, 1, 8, 0 });
     dirIcon.VerticalAlignment(VerticalAlignment::Center);
 
-    dirText = MakeText(L"点击选择输出目录", 12, kTextTertiary);
+    dirText = MakeText(L"点击选择输出目录", 12, g_palette.textTertiary);
     dirText.TextTrimming(TextTrimming::CharacterEllipsis);
     dirText.TextWrapping(TextWrapping::NoWrap);
     dirText.VerticalAlignment(VerticalAlignment::Center);
@@ -709,10 +959,10 @@ void MainWindow::Impl::Build() {
     StackPanel bannerStack;
     bannerStack.Spacing(2);
 
-    bannerTitle = MakeText(L"", 12, kTextPrimary, true);
+    bannerTitle = MakeText(L"", 12, g_palette.textPrimary, true);
     bannerTitle.Visibility(Visibility::Collapsed);
 
-    bannerText = MakeText(L"", 12, kTextSecondary);
+    bannerText = MakeText(L"", 12, g_palette.textSecondary);
     bannerText.TextWrapping(TextWrapping::Wrap);
 
     bannerStack.Children().Append(bannerTitle);
@@ -739,10 +989,10 @@ void MainWindow::Impl::Build() {
     statusStack.Spacing(8);
     statusStack.VerticalAlignment(VerticalAlignment::Center);
 
-    statusText = MakeText(L"就绪 · 选择文件后开始转换", 12, kTextSecondary);
+    statusText = MakeText(L"就绪 · 选择文件后开始转换", 12, g_palette.textSecondary);
     statusStack.Children().Append(statusText);
 
-    overallBar = std::make_shared<LiteBar>(4, kAccentB, 26);
+    overallBar = std::make_shared<LiteBar>(4, g_palette.accentAlt, 26);
     overallBar->Root().Width(440);
     overallBar->Root().MaxWidth(440);
     overallBar->Root().HorizontalAlignment(HorizontalAlignment::Left);
@@ -771,9 +1021,10 @@ void MainWindow::Impl::Build() {
     convertStack.Orientation(Orientation::Horizontal);
     convertStack.Spacing(9);
     convertStack.VerticalAlignment(VerticalAlignment::Center);
-    convertStack.Children().Append(MakeIcon(Symbol::Play, 13, Rgba(255, 255, 255)));
+    convertIcon = MakeIcon(Symbol::Play, 13, OnAccent(g_palette.accent));
+    convertStack.Children().Append(convertIcon);
 
-    convertLabel = MakeText(L"开始转换", 14, Rgba(255, 255, 255), true);
+    convertLabel = MakeText(L"开始转换", 14, OnAccent(g_palette.accent), true);
     convertLabel.VerticalAlignment(VerticalAlignment::Center);
     convertStack.Children().Append(convertLabel);
     convertButton.Child(convertStack);
@@ -790,7 +1041,9 @@ void MainWindow::Impl::Build() {
     }
 
     const double scale = GetDpiForSystem() / 96.0;
-    window.AppWindow().Resize({ static_cast<int32_t>(1040 * scale), static_cast<int32_t>(776 * scale) });
+    window.AppWindow().Resize({ static_cast<int32_t>(900 * scale), static_cast<int32_t>(620 * scale) });
+
+    root.ActualThemeChanged([this](FrameworkElement const&, Inspectable const&) { SyncTheme(); });
 
     addButton.Click([this](Inspectable const&, RoutedEventArgs const&) { AddFilesFromDialog(); });
     clearButton.Click([this](Inspectable const&, RoutedEventArgs const&) {
@@ -818,7 +1071,7 @@ void MainWindow::Impl::Build() {
         if (picked.empty()) return;
         customDirectory = picked.front();
         dirText.Text(hstring(customDirectory));
-        dirText.Foreground(Solid(kTextPrimary));
+        dirText.Foreground(Solid(g_palette.textPrimary));
         if (auto checked = customDirRadio.IsChecked(); !checked || !checked.Value()) {
             syncingOutputMode = true;
             customDirRadio.IsChecked(true);
@@ -840,54 +1093,149 @@ void MainWindow::Impl::Build() {
     });
 
     openFolderButton.Click([this](Inspectable const&, RoutedEventArgs const&) {
-        if (lastOutputDirectory.empty()) return;
-        ShellExecuteW(nullptr, L"open", lastOutputDirectory.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        std::wstring target = CommonDirectory(outputRoots);
+        if (target.empty()) target = lastOutputDirectory;
+        if (target.empty()) return;
+        ShellExecuteW(nullptr, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     });
 
-    window.Closed([this](Inspectable const&, WindowEventArgs const&) { closed = true; });
-
-    root.DragOver([](Inspectable const&, DragEventArgs const& args) {
-        args.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
-        args.DragUIOverride().IsCaptionVisible(true);
-        args.DragUIOverride().Caption(L"添加到列表");
+    window.Closed([this](Inspectable const&, WindowEventArgs const&) {
+        closed = true;
+        for (HWND hwnd : g_dropWindows) {
+            DragAcceptFiles(hwnd, FALSE);
+            RemoveWindowSubclass(hwnd, DropSubclassProc, 1);
+        }
+        g_dropWindows.clear();
+        g_filesDropped = nullptr;
+        try {
+            if (uiSettings) uiSettings.ColorValuesChanged(accentToken);
+        } catch (...) {
+        }
     });
-    root.Drop({ this, &Impl::OnDrop });
 
     RefreshCounters();
 }
 
-winrt::fire_and_forget MainWindow::Impl::OnDrop(Inspectable const& sender, DragEventArgs const& args) {
-    auto self = shared_from_this();
-    (void)sender;
+void MainWindow::Impl::InstallDropSupport() {
+    g_filesDropped = [this](std::vector<std::wstring> const& paths) {
+        if (closed.load()) return;
 
-    auto deferral = args.GetDeferral();
-    try {
-        auto view = args.DataView();
-        if (view.Contains(winrt::Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems())) {
-            auto storageItems = co_await view.GetStorageItemsAsync();
-            int added = 0;
-            int ignored = 0;
-            for (auto const& entry : storageItems) {
-                if (auto file = entry.try_as<winrt::Windows::Storage::StorageFile>()) {
-                    if (AddFile(std::wstring(file.Path().c_str()))) {
-                        ++added;
-                    } else {
-                        ++ignored;
-                    }
-                } else {
-                    ++ignored;
-                }
-            }
-            if (added > 0) {
-                ClearInfo();
-            } else if (ignored > 0) {
-                SetInfo(L"没有可用的文件", L"拖进来的内容里没有 .ncm 文件，或者已经在列表中了。",
-                        NoticeKind::Info);
-            }
+        int added = 0;
+        for (auto const& path : paths) {
+            if (AddFile(path)) ++added;
         }
+
+        if (added > 0) {
+            ClearInfo();
+            statusText.Text(hstring(L"已添加 " + std::to_wstring(added) + L" 个文件"));
+            RefreshCounters();
+        } else {
+            SetInfo(L"没有可用的文件", L"拖进来的内容里没有 .ncm 文件，或者已经在列表中了。", NoticeKind::Info);
+        }
+    };
+
+    HWND hwnd = nullptr;
+    try {
+        hwnd = winrt::Microsoft::UI::GetWindowFromWindowId(window.AppWindow().Id());
+    } catch (...) {
+        return;
+    }
+    if (!hwnd) return;
+
+    RegisterDropTree(hwnd);
+
+    try {
+        auto rescan = winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
+        rescan.Interval(std::chrono::milliseconds(700));
+        std::weak_ptr<Impl> weak = weak_from_this();
+        rescan.Tick([weak, hwnd, rescan](auto const&, auto const&) mutable {
+            rescan.Stop();
+            if (weak.lock()) RegisterDropTree(hwnd);
+        });
+        rescan.Start();
     } catch (...) {
     }
-    deferral.Complete();
+
+    try {
+        uiSettings = winrt::Windows::UI::ViewManagement::UISettings();
+        std::weak_ptr<Impl> weak = weak_from_this();
+        accentToken = uiSettings.ColorValuesChanged([weak](auto const&, auto const&) {
+            if (auto self = weak.lock()) {
+                self->Post([self]() {
+                    try {
+                        self->ApplyPalette(g_palette.dark);
+                    } catch (...) {
+                    }
+                });
+            }
+        });
+    } catch (...) {
+    }
+}
+
+void MainWindow::Impl::ApplyNativeTitlebarTheme() {
+    HWND hwnd = nullptr;
+    try {
+        hwnd = winrt::Microsoft::UI::GetWindowFromWindowId(window.AppWindow().Id());
+    } catch (...) {
+        return;
+    }
+    if (!hwnd) return;
+
+    const BOOL dark = g_palette.dark ? TRUE : FALSE;
+    constexpr DWORD kImmersiveDarkMode = 20;
+    DwmSetWindowAttribute(hwnd, kImmersiveDarkMode, &dark, sizeof(dark));
+
+    const COLORREF border = g_palette.dark ? RGB(48, 48, 48) : RGB(222, 222, 222);
+    constexpr DWORD kBorderColor = 34;
+    DwmSetWindowAttribute(hwnd, kBorderColor, &border, sizeof(border));
+}
+
+void MainWindow::Impl::ApplyPalette(bool dark) {
+    const Palette previous = g_palette;
+    g_palette = MakePalette(dark);
+
+    root.Background(Solid(g_palette.surface));
+    RecolorTree(root, previous, g_palette);
+
+    const auto ink = OnAccent(g_palette.accent);
+    if (convertLabel) convertLabel.Foreground(Solid(ink));
+    if (convertIcon) convertIcon.Foreground(Solid(ink));
+    if (brandIcon) brandIcon.Foreground(Solid(Rgba(255, 255, 255)));
+
+    RecolorItemChips();
+    ClearInfo();
+    ApplyNativeTitlebarTheme();
+}
+
+void MainWindow::Impl::SyncTheme() {
+    try {
+        const bool dark = root.ActualTheme() == ElementTheme::Dark;
+        if (dark == g_palette.dark) return;
+        ApplyPalette(dark);
+    } catch (...) {
+        // A colour refresh must never take the window down; the original
+        // palette simply stays in place until the next change.
+    }
+}
+
+void MainWindow::Impl::RecolorItemChips() {
+    for (auto const& item : items) {
+        switch (item->state) {
+        case Item::State::Pending:
+            SetChip(*item, L"待转换", g_palette.textSecondary, SurfaceInk(14));
+            break;
+        case Item::State::Running:
+            SetChip(*item, L"转换中", g_palette.warning, Tint(g_palette.warning, 40));
+            break;
+        case Item::State::Done:
+            SetChip(*item, L"完成", g_palette.success, Tint(g_palette.success, 40));
+            break;
+        case Item::State::Failed:
+            SetChip(*item, L"失败", g_palette.danger, Tint(g_palette.danger, 40));
+            break;
+        }
+    }
 }
 
 void MainWindow::Impl::AddFilesFromDialog() {
@@ -967,15 +1315,15 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     textStack.Spacing(2);
     textStack.VerticalAlignment(VerticalAlignment::Center);
 
-    item->titleText = MakeText(item->name, 14, kTextPrimary, true);
+    item->titleText = MakeText(item->name, 14, g_palette.textPrimary, true);
     item->titleText.TextWrapping(TextWrapping::NoWrap);
     item->titleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->subtitleText = MakeText(sizeText + L" · NCM", 12, kTextTertiary);
+    item->subtitleText = MakeText(sizeText + L" · NCM", 12, g_palette.textTertiary);
     item->subtitleText.TextWrapping(TextWrapping::NoWrap);
     item->subtitleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->bar = std::make_shared<LiteBar>(3, kAccentB, 24);
+    item->bar = std::make_shared<LiteBar>(3, g_palette.accentAlt, 24);
     item->bar->Root().Margin(Thickness{ 0, 6, 0, 0 });
     item->bar->SetVisibility(Visibility::Collapsed);
 
@@ -990,7 +1338,7 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     chip.Padding(Thickness{ 9, 3, 9, 3 });
     chip.VerticalAlignment(VerticalAlignment::Center);
     chip.Background(WhiteFill(14));
-    item->chipText = MakeText(L"待转换", 11, kIdle);
+    item->chipText = MakeText(L"待转换", 11, g_palette.textSecondary);
     chip.Child(item->chipText);
     item->chip = chip;
     Grid::SetColumn(chip, 3);
@@ -1080,16 +1428,16 @@ void MainWindow::Impl::UpdateOutputMode() {
 }
 
 void MainWindow::Impl::SetInfo(std::wstring const& title, std::wstring const& message, NoticeKind kind) {
-    winrt::Windows::UI::Color color = kAccentB;
+    winrt::Windows::UI::Color color = g_palette.accentAlt;
     hstring glyph = L"\uE946";
     if (kind == NoticeKind::Success) {
-        color = kSuccess;
+        color = g_palette.success;
         glyph = L"\uE930";
     } else if (kind == NoticeKind::Warning) {
-        color = kWarning;
+        color = g_palette.warning;
         glyph = L"\uE7BA";
     } else if (kind == NoticeKind::Error) {
-        color = kDanger;
+        color = g_palette.danger;
         glyph = L"\uE783";
     }
 
@@ -1099,7 +1447,7 @@ void MainWindow::Impl::SetInfo(std::wstring const& title, std::wstring const& me
     bannerTitle.Foreground(Solid(color));
     bannerTitle.Visibility(title.empty() ? Visibility::Collapsed : Visibility::Visible);
     bannerText.Text(hstring(message));
-    bannerText.Foreground(Solid(kTextSecondary));
+    bannerText.Foreground(Solid(g_palette.textSecondary));
     banner.Background(Solid(Rgba(color.R, color.G, color.B, 22)));
     banner.BorderBrush(Solid(Rgba(color.R, color.G, color.B, 96)));
     banner.Visibility(Visibility::Visible);
@@ -1172,7 +1520,7 @@ void MainWindow::Impl::StartConversion() {
     std::thread([self, targets, sameDirectory, outputDirectory, overwrite, total]() {
         int done = 0;
         int succeeded = 0;
-        std::wstring lastDirectory;
+        std::vector<std::wstring> outputDirectories;
 
         for (auto const& item : targets) {
             if (self->closed.load()) break;
@@ -1188,21 +1536,29 @@ void MainWindow::Impl::StartConversion() {
             ++done;
             if (outcome.ok) {
                 ++succeeded;
-                std::filesystem::path written(outcome.outputPath);
-                lastDirectory = written.parent_path().wstring();
+                const std::filesystem::path written(outcome.outputPath);
+                const std::wstring directory = written.parent_path().wstring();
+                bool known = false;
+                for (auto const& existing : outputDirectories) {
+                    if (_wcsicmp(existing.c_str(), directory.c_str()) == 0) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) outputDirectories.push_back(directory);
             }
             self->Post([self, item, outcome, done, total]() { self->FinishItem(item, outcome, done, total); });
         }
 
-        self->Post([self, done, total, succeeded, lastDirectory]() {
-            self->FinishAll(done, total, succeeded, lastDirectory);
+        self->Post([self, done, total, succeeded, outputDirectories]() {
+            self->FinishAll(done, total, succeeded, outputDirectories);
         });
     }).detach();
 }
 
 void MainWindow::Impl::SetItemRunning(std::shared_ptr<Item> const& item) {
     item->state = Item::State::Running;
-    SetChip(*item, L"转换中", kWarning, Rgba(255, 203, 112, 40));
+    SetChip(*item, L"转换中", g_palette.warning, Tint(g_palette.warning, 40));
     item->bar->SetVisibility(Visibility::Visible);
     item->bar->SetPercent(0);
     statusText.Text(hstring(L"正在转换：" + item->name));
@@ -1213,7 +1569,7 @@ void MainWindow::Impl::SetItemProgress(std::shared_ptr<Item> const& item, int pe
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     item->bar->SetPercent(percent);
-    SetChip(*item, L"转换中 " + std::to_wstring(percent) + L"%", kWarning, Rgba(255, 203, 112, 40));
+    SetChip(*item, L"转换中 " + std::to_wstring(percent) + L"%", g_palette.warning, Rgba(255, 203, 112, 40));
 }
 
 void MainWindow::Impl::FinishItem(std::shared_ptr<Item> const& item, ncmlib::ConvertOutcome const& outcome, int done,
@@ -1222,7 +1578,7 @@ void MainWindow::Impl::FinishItem(std::shared_ptr<Item> const& item, ncmlib::Con
 
     if (outcome.ok) {
         item->state = Item::State::Done;
-        SetChip(*item, L"完成", kSuccess, Rgba(122, 226, 148, 40));
+        SetChip(*item, L"完成", g_palette.success, Tint(g_palette.success, 40));
         item->bar->SetVisibility(Visibility::Collapsed);
 
         std::wstring detail = outcome.summary;
@@ -1232,7 +1588,7 @@ void MainWindow::Impl::FinishItem(std::shared_ptr<Item> const& item, ncmlib::Con
         if (!outcome.title.empty()) item->titleText.Text(hstring(outcome.title));
     } else {
         item->state = Item::State::Failed;
-        SetChip(*item, L"失败", kDanger, Rgba(255, 138, 138, 40));
+        SetChip(*item, L"失败", g_palette.danger, Tint(g_palette.danger, 40));
         item->bar->SetVisibility(Visibility::Collapsed);
         item->subtitleText.Text(hstring(outcome.message.empty() ? L"转换失败" : outcome.message));
     }
@@ -1240,25 +1596,30 @@ void MainWindow::Impl::FinishItem(std::shared_ptr<Item> const& item, ncmlib::Con
     statusText.Text(hstring(L"进度 " + std::to_wstring(done) + L" / " + std::to_wstring(total)));
 }
 
-void MainWindow::Impl::FinishAll(int done, int total, int succeeded, std::wstring const& lastDirectory) {
+void MainWindow::Impl::FinishAll(int done, int total, int succeeded, std::vector<std::wstring> const& outputDirectories) {
     running = false;
     SetConvertEnabled(!items.empty());
     overallBar->SetPercent(total > 0 ? 100.0 : 0.0);
 
-    if (succeeded > 0 && !lastDirectory.empty()) {
-        lastOutputDirectory = lastDirectory;
+    outputRoots = outputDirectories;
+    if (succeeded > 0 && !outputDirectories.empty()) {
+        lastOutputDirectory = outputDirectories.front();
         openFolderButton.Visibility(Visibility::Visible);
     }
 
+    std::wstring summary;
     if (done < total) {
-        statusText.Text(hstring(L"已停止 · 完成 " + std::to_wstring(succeeded) + L" / " + std::to_wstring(total)));
+        summary = L"已停止 · 完成 " + std::to_wstring(succeeded) + L" / " + std::to_wstring(total);
     } else if (succeeded == total) {
-        statusText.Text(hstring(L"全部完成 · 共 " + std::to_wstring(succeeded) + L" 个文件"));
+        summary = L"全部完成 · 共 " + std::to_wstring(succeeded) + L" 个文件";
     } else {
-        statusText.Text(hstring(L"完成 " + std::to_wstring(succeeded) + L" / " + std::to_wstring(total) + L"，" +
-                                std::to_wstring(total - succeeded) + L" 个失败"));
+        summary = L"完成 " + std::to_wstring(succeeded) + L" / " + std::to_wstring(total) + L"，" +
+                  std::to_wstring(total - succeeded) + L" 个失败";
         SetInfo(L"部分文件转换失败", L"失败原因显示在对应文件的下方。", NoticeKind::Warning);
     }
+
+    if (outputDirectories.size() > 1) summary += L" · 已写入各自的源目录";
+    statusText.Text(hstring(summary));
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,8 +1631,14 @@ MainWindow::MainWindow() : m_impl(std::make_shared<Impl>()) {
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::RunConversionNow() {
+    if (m_impl) m_impl->StartConversion();
+}
+
 void MainWindow::Activate() {
     m_impl->window.Activate();
+    m_impl->ApplyNativeTitlebarTheme();
+    m_impl->InstallDropSupport();
 }
 
 winrt::Microsoft::UI::Xaml::FrameworkElement MainWindow::Root() const {

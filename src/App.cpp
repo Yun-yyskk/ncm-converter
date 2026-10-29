@@ -17,8 +17,10 @@ using namespace winrt::Microsoft::UI::Xaml;
 
 namespace {
 
-// Set by --ui-snapshot, empty for normal interactive runs.
+// Set by --ui-snapshot and --ui-run, empty for normal interactive runs.
 std::wstring g_snapshotDirectory;
+// --ui-run also starts the conversion, so the whole pipeline can be verified.
+bool g_autoConvert = false;
 
 std::string ToUtf8(std::wstring const& text) {
     if (text.empty()) return {};
@@ -87,9 +89,13 @@ struct App : ApplicationT<App> {
         snapshotTimer = winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
         snapshotTimer.Interval(std::chrono::milliseconds(250));
         snapshotTimer.Tick([this](auto const&, auto const&) {
-            // Give layout and the theme brushes two seconds to settle, then
-            // render, write the report and close.
-            if (++beats < 8) return;
+            ++beats;
+            if (g_autoConvert && beats == 4) window->RunConversionNow();
+            // Give layout and the theme brushes two seconds to settle (eight
+            // seconds when a conversion has to finish first), then render,
+            // write the report and close.
+            const int target = g_autoConvert ? 36 : 8;
+            if (beats < target) return;
             snapshotTimer.Stop();
             CaptureWindowAndExit(window.get(), g_snapshotDirectory);
         });
@@ -133,9 +139,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return result;
     }
 
-    // Test hook: renders the window to <dir>\ui.png plus a visual tree dump and
-    // exits. Extra arguments are treated as files to load first.
-    if (argv != nullptr && argc >= 3 && wcscmp(argv[1], L"--ui-snapshot") == 0) {
+    // Development hooks, both write <dir>\ui.png plus a visual tree dump before
+    // exiting: --ui-snapshot only renders the window, --ui-run also converts the
+    // files given after <dir>. Extra arguments are treated as files to load.
+    if (argv != nullptr && argc >= 3 &&
+        (wcscmp(argv[1], L"--ui-snapshot") == 0 || wcscmp(argv[1], L"--ui-run") == 0)) {
+        g_autoConvert = wcscmp(argv[1], L"--ui-run") == 0;
         g_snapshotDirectory = argv[2];
         CreateDirectoryW(g_snapshotDirectory.c_str(), nullptr);
         for (int index = 3; index < argc; ++index) App::PendingPaths().emplace_back(argv[index]);

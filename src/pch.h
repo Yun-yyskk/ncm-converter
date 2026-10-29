@@ -13,6 +13,13 @@
 #include <restrictederrorinfo.h>
 #include <hstring.h>
 
+// winuser.h defines GetCurrentTime as a macro (GetTickCount). C++/WinRT's
+// generated media-animation projection has a method with the same name, and the
+// macro mangles it into an unparsable definition, so drop it here.
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Storage.h>
