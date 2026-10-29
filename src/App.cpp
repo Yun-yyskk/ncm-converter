@@ -21,7 +21,6 @@ namespace {
 std::wstring g_snapshotDirectory;
 // --ui-run also starts the conversion, so the whole pipeline can be verified.
 bool g_autoConvert = false;
-
 std::string ToUtf8(std::wstring const& text) {
     if (text.empty()) return {};
     const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr,
@@ -129,6 +128,12 @@ winrt::fire_and_forget CaptureWindowAndExit(MainWindow* window, std::wstring dir
     Application::Current().Exit();
 }
 
+int RunGui() {
+    winrt::init_apartment(winrt::apartment_type::single_threaded);
+    Application::Start([](auto&&) { winrt::make<App>(); });
+    return 0;
+}
+
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -149,9 +154,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         CreateDirectoryW(g_snapshotDirectory.c_str(), nullptr);
         for (int index = 3; index < argc; ++index) App::PendingPaths().emplace_back(argv[index]);
         LocalFree(argv);
-        winrt::init_apartment(winrt::apartment_type::single_threaded);
-        Application::Start([](auto&&) { winrt::make<App>(); });
-        return 0;
+        return RunGui();
     }
 
     // Interactive: any extra arguments are files to queue up (drag onto the exe,
@@ -163,7 +166,5 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (argv != nullptr) LocalFree(argv);
     App::PendingPaths() = std::move(initialPaths);
 
-    winrt::init_apartment(winrt::apartment_type::single_threaded);
-    Application::Start([](auto&&) { winrt::make<App>(); });
-    return 0;
+    return RunGui();
 }

@@ -52,6 +52,8 @@ winrt::Windows::UI::Color Rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF
 struct Palette {
     bool dark = false;
     winrt::Windows::UI::Color surface{};
+    winrt::Windows::UI::Color card{};
+    winrt::Windows::UI::Color stroke{};
     winrt::Windows::UI::Color textPrimary{};
     winrt::Windows::UI::Color textSecondary{};
     winrt::Windows::UI::Color textTertiary{};
@@ -79,14 +81,10 @@ winrt::Windows::UI::Color Tint(winrt::Windows::UI::Color color, uint8_t alpha) {
     return Rgba(color.R, color.G, color.B, alpha);
 }
 
-winrt::Windows::UI::Color SystemAccent() {
-    try {
-        winrt::Windows::UI::ViewManagement::UISettings settings;
-        const auto accent = settings.GetColorValue(winrt::Windows::UI::ViewManagement::UIColorType::Accent);
-        if (accent.A != 0) return accent;
-    } catch (...) {
-    }
-    return Rgba(0x00, 0x63, 0xB8);
+// Fixed brand blue - the same blue Windows ships as its default accent, so the
+// tool always looks like a Windows app instead of borrowing the user's colour.
+winrt::Windows::UI::Color WindowsBlue(bool dark) {
+    return dark ? Rgba(0x60, 0xCD, 0xFF) : Rgba(0x00, 0x5F, 0xB8);
 }
 
 bool SystemPrefersDark() {
@@ -103,23 +101,27 @@ bool SystemPrefersDark() {
 Palette MakePalette(bool dark) {
     Palette palette;
     palette.dark = dark;
-    palette.accent = SystemAccent();
-    // The second gradient stop moves away from the background, so the accent
-    // keeps its bite on a light surface instead of washing out.
-    palette.accentAlt = Lighten(palette.accent, dark ? 0.30 : -0.28);
+    palette.accent = WindowsBlue(dark);
+    // Just a breath of a gradient: the second stop is a touch lighter, so
+    // buttons and badges read as surfaces rather than flat rectangles.
+    palette.accentAlt = Lighten(palette.accent, dark ? 0.34 : 0.16);
     if (dark) {
         palette.surface = Rgba(32, 32, 32);
+        palette.card = Rgba(43, 43, 43);
+        palette.stroke = Rgba(255, 255, 255, 18);
         palette.textPrimary = Rgba(255, 255, 255);
-        palette.textSecondary = Rgba(198, 198, 198);
-        palette.textTertiary = Rgba(144, 144, 144);
+        palette.textSecondary = Rgba(200, 200, 200);
+        palette.textTertiary = Rgba(148, 148, 148);
         palette.success = Rgba(108, 203, 95);
         palette.danger = Rgba(255, 153, 164);
         palette.warning = Rgba(252, 225, 0);
     } else {
         palette.surface = Rgba(243, 243, 243);
+        palette.card = Rgba(252, 252, 252);
+        palette.stroke = Rgba(0, 0, 0, 16);
         palette.textPrimary = Rgba(26, 26, 26);
-        palette.textSecondary = Rgba(94, 94, 94);
-        palette.textTertiary = Rgba(126, 126, 126);
+        palette.textSecondary = Rgba(96, 96, 96);
+        palette.textTertiary = Rgba(128, 128, 128);
         palette.success = Rgba(15, 123, 15);
         palette.danger = Rgba(196, 43, 28);
         palette.warning = Rgba(157, 93, 0);
@@ -177,6 +179,8 @@ LinearGradientBrush AccentGradient() {
 // fills flip their ink when the theme changes.
 winrt::Windows::UI::Color RemapColor(winrt::Windows::UI::Color color, Palette const& from, Palette const& to) {
     if (SameColor(color, from.surface)) return to.surface;
+    if (SameColor(color, from.card)) return to.card;
+    if (SameColor(color, from.stroke)) return to.stroke;
     if (SameColor(color, from.textPrimary)) return to.textPrimary;
     if (SameColor(color, from.textSecondary)) return to.textSecondary;
     if (SameColor(color, from.textTertiary)) return to.textTertiary;
@@ -302,6 +306,37 @@ std::wstring CommonDirectory(std::vector<std::wstring> const& directories) {
     return common;
 }
 
+// WinUI draws CheckBox, RadioButton and ToggleSwitch with the system accent
+// brushes, which on this machine is a muddy brown. Seeding the application
+// resources with our own accent keeps those stock controls on brand.
+void SeedAccentResources() {
+    auto insert = [](wchar_t const* key, winrt::Windows::Foundation::IInspectable const& value) {
+        try {
+            Application::Current().Resources().Insert(box_value(hstring(key)), value);
+        } catch (...) {
+            // A locked-down resource dictionary only costs the accent colour.
+        }
+    };
+    auto color = [&](wchar_t const* key, winrt::Windows::UI::Color value) { insert(key, box_value(value)); };
+    auto brush = [&](wchar_t const* key, winrt::Windows::UI::Color value) { insert(key, Solid(value)); };
+
+    color(L"SystemAccentColor", g_palette.accent);
+    color(L"SystemAccentColorLight1", Lighten(g_palette.accent, 0.12));
+    color(L"SystemAccentColorLight2", Lighten(g_palette.accent, 0.24));
+    color(L"SystemAccentColorLight3", Lighten(g_palette.accent, 0.36));
+    color(L"SystemAccentColorDark1", Lighten(g_palette.accent, -0.12));
+    color(L"SystemAccentColorDark2", Lighten(g_palette.accent, -0.24));
+    color(L"SystemAccentColorDark3", Lighten(g_palette.accent, -0.36));
+
+    brush(L"AccentFillColorDefaultBrush", g_palette.accent);
+    const auto accent = g_palette.accent;
+    brush(L"AccentFillColorSecondaryBrush", Rgba(accent.R, accent.G, accent.B, 0xE6));
+    brush(L"AccentFillColorTertiaryBrush", Rgba(accent.R, accent.G, accent.B, 0xCC));
+    brush(L"SystemControlHighlightAccentBrush", g_palette.accent);
+    brush(L"SystemControlForegroundAccentBrush", g_palette.accent);
+    brush(L"SystemControlBackgroundAccentBrush", g_palette.accent);
+}
+
 TextBlock MakeText(std::wstring const& value, double size, winrt::Windows::UI::Color color, bool semibold = false) {
     TextBlock block;
     block.Text(hstring(value));
@@ -365,24 +400,24 @@ ColumnDefinition ColStar(double weight = 1.0) {
 
 Border MakeCard() {
     Border card;
-    card.Background(WhiteFill(9));
-    card.BorderBrush(WhiteFill(24));
+    card.Background(Solid(g_palette.card));
+    card.BorderBrush(Solid(g_palette.stroke));
     card.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    card.CornerRadius(CornerRadius{ 14, 14, 14, 14 });
-    card.Padding(Thickness{ 18, 14, 18, 14 });
+    card.CornerRadius(CornerRadius{ 8, 8, 8, 8 });
+    card.Padding(Thickness{ 16, 14, 16, 14 });
     return card;
 }
 
 Button MakeButton(Symbol symbol, std::wstring const& text) {
     StackPanel content;
     content.Orientation(Orientation::Horizontal);
-    content.Spacing(7);
+    content.Spacing(5);
     content.VerticalAlignment(VerticalAlignment::Center);
 
-    FontIcon icon = MakeIcon(symbol, 14, g_palette.textPrimary);
+    FontIcon icon = MakeIcon(symbol, 12, g_palette.textPrimary);
     icon.VerticalAlignment(VerticalAlignment::Center);
 
-    TextBlock label = MakeText(text, 13, g_palette.textPrimary);
+    TextBlock label = MakeText(text, 12, g_palette.textPrimary);
     label.VerticalAlignment(VerticalAlignment::Center);
 
     content.Children().Append(icon);
@@ -390,8 +425,12 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
 
     Button button;
     button.Content(content);
-    button.CornerRadius(CornerRadius{ 8, 8, 8, 8 });
-    button.Padding(Thickness{ 12, 7, 14, 7 });
+    button.Background(Solid(g_palette.card));
+    button.BorderBrush(Solid(g_palette.stroke));
+    button.BorderThickness(Thickness{ 1, 1, 1, 1 });
+    button.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
+    button.Padding(Thickness{ 11, 4, 11, 4 });
+    button.MinHeight(30);
     return button;
 }
 
@@ -625,8 +664,6 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     std::vector<std::wstring> outputRoots;
     FontIcon brandIcon{ nullptr };
     FontIcon convertIcon{ nullptr };
-    winrt::Windows::UI::ViewManagement::UISettings uiSettings{ nullptr };
-    winrt::event_token accentToken{};
     std::wstring customDirectory;
 
     void Build();
@@ -665,6 +702,7 @@ void MainWindow::Impl::Build() {
     queue = DispatcherQueue::GetForCurrentThread();
 
     g_palette = MakePalette(SystemPrefersDark());
+    SeedAccentResources();
 
     root = Grid();
     root.RequestedTheme(ElementTheme::Default);
@@ -674,38 +712,19 @@ void MainWindow::Impl::Build() {
     root.RowDefinitions().Append(RowStar());   // content
 
     // ----- title bar --------------------------------------------------------
+    // The caption is drawn by the system (drag strip only), which is what a
+    // native Windows 11 window looks like.
     Grid titleBar;
-    titleBar.Height(48);
-    titleBar.Padding(Thickness{ 18, 0, 18, 0 });
-    titleBar.ColumnDefinitions().Append(ColAuto());
-    titleBar.ColumnDefinitions().Append(ColStar());
+    titleBar.Height(32);
+    titleBar.Padding(Thickness{ 16, 0, 16, 0 });
     titleBar.VerticalAlignment(VerticalAlignment::Top);
 
-    StackPanel brand;
-    brand.Orientation(Orientation::Horizontal);
-    brand.Spacing(10);
-    brand.VerticalAlignment(VerticalAlignment::Center);
-
-    Border brandBadge;
-    brandBadge.Width(24);
-    brandBadge.Height(24);
-    brandBadge.CornerRadius(CornerRadius{ 7, 7, 7, 7 });
-    brandBadge.Background(AccentGradient());
-    brandIcon = MakeIcon(Symbol::MusicInfo, 11, Rgba(255, 255, 255));
-    brandBadge.Child(brandIcon);
-    brand.Children().Append(brandBadge);
-
-    TextBlock brandText = MakeText(L"NCM 转 FLAC", 12, g_palette.textSecondary);
-    brandText.VerticalAlignment(VerticalAlignment::Center);
-    brand.Children().Append(brandText);
-
-    titleBar.Children().Append(brand);
     Grid::SetRow(titleBar, 0);
     root.Children().Append(titleBar);
 
     // ----- content ----------------------------------------------------------
     Grid content;
-    content.Padding(Thickness{ 28, 4, 28, 22 });
+    content.Padding(Thickness{ 20, 4, 20, 16 });
     content.RowDefinitions().Append(RowAuto());  // hero
     content.RowDefinitions().Append(RowStar());  // list
     content.RowDefinitions().Append(RowAuto());  // settings
@@ -714,60 +733,28 @@ void MainWindow::Impl::Build() {
     Grid::SetRow(content, 1);
     root.Children().Append(content);
 
-    // hero
+    // page header, Win11 settings style
     Grid hero;
-    hero.Margin(Thickness{ 0, 6, 0, 18 });
+    hero.Margin(Thickness{ 2, 4, 2, 14 });
     hero.ColumnDefinitions().Append(ColStar());
-    hero.ColumnDefinitions().Append(ColAuto());
 
     StackPanel heroText;
-    heroText.Spacing(6);
-    heroText.VerticalAlignment(VerticalAlignment::Center);
-    TextBlock heroTitle = MakeText(L"", 25, g_palette.textPrimary, true);
-    {
-        auto inlines = heroTitle.Inlines();
-        winrt::Microsoft::UI::Xaml::Documents::Run prefix;
-        prefix.Text(L"把 ");
-        inlines.Append(prefix);
-
-        winrt::Microsoft::UI::Xaml::Documents::Run source;
-        source.Text(L".ncm");
-        source.Foreground(AccentGradient());
-        inlines.Append(source);
-
-        winrt::Microsoft::UI::Xaml::Documents::Run middle;
-        middle.Text(L" 还原成无损 ");
-        inlines.Append(middle);
-
-        winrt::Microsoft::UI::Xaml::Documents::Run target;
-        target.Text(L"FLAC");
-        target.Foreground(AccentGradient());
-        inlines.Append(target);
-    }
+    heroText.Spacing(3);
+    TextBlock heroTitle = MakeText(L"NCM 转 FLAC", 20, g_palette.textPrimary, true);
     heroText.Children().Append(heroTitle);
 
-    TextBlock heroHint = MakeText(L"读取网易云音乐的加密容器，输出标准 FLAC —— 封面、歌词与标签一并写入。", 13,
+    TextBlock heroHint = MakeText(L"把网易云音乐的加密容器还原成无损 FLAC，封面、歌词与标签一并写入。", 11.5,
                                   g_palette.textSecondary);
-    heroHint.MaxWidth(640);
+    heroHint.MaxWidth(600);
     heroText.Children().Append(heroHint);
     hero.Children().Append(heroText);
-
-    Border heroBadge;
-    heroBadge.Width(62);
-    heroBadge.Height(62);
-    heroBadge.CornerRadius(CornerRadius{ 18, 18, 18, 18 });
-    heroBadge.Background(AccentGradient());
-    heroBadge.VerticalAlignment(VerticalAlignment::Center);
-    heroBadge.Child(MakeIcon(Symbol::MusicInfo, 26, Rgba(255, 255, 255)));
-    Grid::SetColumn(heroBadge, 1);
-    hero.Children().Append(heroBadge);
 
     Grid::SetRow(hero, 0);
     content.Children().Append(hero);
 
     // file list card
     Border listCard = MakeCard();
-    listCard.Padding(Thickness{ 16, 12, 16, 12 });
+    listCard.Padding(Thickness{ 14, 12, 14, 12 });
     Grid::SetRow(listCard, 1);
     content.Children().Append(listCard);
 
@@ -781,15 +768,15 @@ void MainWindow::Impl::Build() {
     listHeader.ColumnDefinitions().Append(ColAuto());
     listHeader.ColumnDefinitions().Append(ColAuto());
     listHeader.ColumnDefinitions().Append(ColAuto());
-    listHeader.Margin(Thickness{ 2, 0, 2, 6 });
+    listHeader.Margin(Thickness{ 2, 0, 2, 4 });
 
     StackPanel listTitleStack;
     listTitleStack.Orientation(Orientation::Horizontal);
-    listTitleStack.Spacing(10);
+    listTitleStack.Spacing(8);
     listTitleStack.VerticalAlignment(VerticalAlignment::Center);
-    listTitleStack.Children().Append(MakeText(L"文件列表", 14, g_palette.textPrimary, true));
+    listTitleStack.Children().Append(MakeText(L"文件列表", 13, g_palette.textPrimary, true));
 
-    countText = MakeText(L"暂无文件", 12, g_palette.textTertiary);
+    countText = MakeText(L"暂无文件", 11, g_palette.textTertiary);
     countText.VerticalAlignment(VerticalAlignment::Center);
     listTitleStack.Children().Append(countText);
     listHeader.Children().Append(listTitleStack);
@@ -801,7 +788,7 @@ void MainWindow::Impl::Build() {
     selectAll.VerticalAlignment(VerticalAlignment::Center);
     // The stock focus visual is a hard black rectangle, which looks accidental
     // on a card. Draw the keyboard cue in the accent colour instead.
-    selectAll.FocusVisualPrimaryThickness(Thickness{ 2, 2, 2, 2 });
+    selectAll.FocusVisualPrimaryThickness(Thickness{ 1, 1, 1, 1 });
     selectAll.FocusVisualPrimaryBrush(Solid(g_palette.accent));
     selectAll.FocusVisualSecondaryThickness(Thickness{ 0, 0, 0, 0 });
     Grid::SetColumn(selectAll, 1);
@@ -821,7 +808,7 @@ void MainWindow::Impl::Build() {
     listGrid.Children().Append(listHeader);
 
     Grid listHost;
-    listHost.MinHeight(150);
+    listHost.MinHeight(120);
     Grid::SetRow(listHost, 1);
 
     ScrollViewer scroller;
@@ -841,15 +828,15 @@ void MainWindow::Impl::Build() {
     emptyState.VerticalAlignment(VerticalAlignment::Center);
     emptyState.IsHitTestVisible(false);
 
-    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 30, SurfaceInk(70));
+    FontIcon emptyIcon = MakeIcon(Symbol::MusicInfo, 22, SurfaceInk(70));
     emptyIcon.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyIcon);
 
-    TextBlock emptyTitle = MakeText(L"还没有文件", 14, g_palette.textSecondary, true);
+    TextBlock emptyTitle = MakeText(L"还没有文件", 12.5, g_palette.textSecondary, true);
     emptyTitle.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyTitle);
 
-    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 12, g_palette.textTertiary);
+    TextBlock emptyHint = MakeText(L"点击「添加文件」，或把 .ncm 直接拖进窗口。", 11, g_palette.textTertiary);
     emptyHint.HorizontalAlignment(HorizontalAlignment::Center);
     emptyState.Children().Append(emptyHint);
 
@@ -858,28 +845,30 @@ void MainWindow::Impl::Build() {
 
     // output settings card
     Border settingsCard = MakeCard();
-    settingsCard.Margin(Thickness{ 0, 14, 0, 0 });
+    settingsCard.Margin(Thickness{ 0, 10, 0, 0 });
     Grid::SetRow(settingsCard, 2);
     content.Children().Append(settingsCard);
 
     StackPanel settings;
-    settings.Spacing(10);
+    settings.Spacing(8);
 
     StackPanel outputHeader;
     outputHeader.Orientation(Orientation::Horizontal);
     outputHeader.Spacing(4);
     outputHeader.VerticalAlignment(VerticalAlignment::Center);
-    outputHeader.Children().Append(MakeText(L"输出位置", 13, g_palette.textPrimary, true));
+    outputHeader.Children().Append(MakeText(L"输出位置", 12, g_palette.textPrimary, true));
 
     sameDirRadio = RadioButton();
     sameDirRadio.GroupName(L"output-mode");
     sameDirRadio.Content(box_value(hstring(L"与源文件同目录")));
     sameDirRadio.IsChecked(true);
-    sameDirRadio.Margin(Thickness{ 0, 0, 16, 0 });
+    sameDirRadio.Margin(Thickness{ 0, 0, 10, 0 });
+    sameDirRadio.FontSize(12);
 
     customDirRadio = RadioButton();
     customDirRadio.GroupName(L"output-mode");
     customDirRadio.Content(box_value(hstring(L"指定目录")));
+    customDirRadio.FontSize(12);
 
     StackPanel radioRow;
     radioRow.Orientation(Orientation::Horizontal);
@@ -894,23 +883,25 @@ void MainWindow::Impl::Build() {
     dirRow.ColumnDefinitions().Append(ColAuto());
 
     dirBox = Border();
-    dirBox.CornerRadius(CornerRadius{ 8, 8, 8, 8 });
-    dirBox.Background(WhiteFill(10));
-    dirBox.BorderBrush(WhiteFill(20));
+    dirBox.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
+    dirBox.Background(Solid(g_palette.card));
+    dirBox.BorderBrush(Solid(g_palette.stroke));
     dirBox.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    dirBox.Padding(Thickness{ 12, 9, 12, 9 });
+    dirBox.Padding(Thickness{ 10, 5, 10, 5 });
+    dirBox.MinHeight(30);
     dirBox.Margin(Thickness{ 0, 0, 8, 0 });
+    dirBox.VerticalAlignment(VerticalAlignment::Center);
     dirBox.Opacity(0.55);
 
     Grid dirInner;
     dirInner.ColumnDefinitions().Append(ColAuto());
     dirInner.ColumnDefinitions().Append(ColStar());
 
-    FontIcon dirIcon = MakeIcon(Symbol::Folder, 13, g_palette.textTertiary);
-    dirIcon.Margin(Thickness{ 0, 1, 8, 0 });
+    FontIcon dirIcon = MakeIcon(Symbol::Folder, 11, g_palette.textTertiary);
+    dirIcon.Margin(Thickness{ 0, 1, 6, 0 });
     dirIcon.VerticalAlignment(VerticalAlignment::Center);
 
-    dirText = MakeText(L"点击选择输出目录", 12, g_palette.textTertiary);
+    dirText = MakeText(L"点击选择输出目录", 11, g_palette.textTertiary);
     dirText.TextTrimming(TextTrimming::CharacterEllipsis);
     dirText.TextWrapping(TextWrapping::NoWrap);
     dirText.VerticalAlignment(VerticalAlignment::Center);
@@ -928,22 +919,29 @@ void MainWindow::Impl::Build() {
     dirRow.Children().Append(browseButton);
     settings.Children().Append(dirRow);
 
+    StackPanel overwriteRow;
+    overwriteRow.Orientation(Orientation::Horizontal);
+    overwriteRow.Spacing(10);
+    overwriteRow.VerticalAlignment(VerticalAlignment::Center);
+    overwriteRow.Children().Append(MakeText(L"覆盖已存在的 FLAC", 12, g_palette.textPrimary));
     overwriteSwitch = ToggleSwitch();
-    overwriteSwitch.Header(box_value(hstring(L"覆盖已存在的 FLAC")));
-    overwriteSwitch.OnContent(box_value(hstring(L"是")));
-    overwriteSwitch.OffContent(box_value(hstring(L"否")));
+    overwriteSwitch.OnContent(box_value(hstring(L"")));
+    overwriteSwitch.OffContent(box_value(hstring(L"")));
+    overwriteSwitch.MinWidth(0);
+    overwriteSwitch.MinHeight(0);
     overwriteSwitch.IsOn(false);
-    settings.Children().Append(overwriteSwitch);
+    overwriteRow.Children().Append(overwriteSwitch);
+    settings.Children().Append(overwriteRow);
 
     settingsCard.Child(settings);
 
     // inline notice banner (InfoBar fail-fasts on this machine, so it is drawn
     // from a Border plus text blocks instead)
     banner = Border();
-    banner.CornerRadius(CornerRadius{ 10, 10, 10, 10 });
+    banner.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
     banner.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    banner.Padding(Thickness{ 14, 10, 14, 10 });
-    banner.Margin(Thickness{ 0, 14, 0, 0 });
+    banner.Padding(Thickness{ 10, 7, 10, 7 });
+    banner.Margin(Thickness{ 0, 10, 0, 0 });
     banner.Visibility(Visibility::Collapsed);
 
     Grid bannerInner;
@@ -952,17 +950,17 @@ void MainWindow::Impl::Build() {
 
     bannerIcon = FontIcon();
     bannerIcon.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
-    bannerIcon.FontSize(14);
-    bannerIcon.Margin(Thickness{ 0, 1, 10, 0 });
+    bannerIcon.FontSize(12);
+    bannerIcon.Margin(Thickness{ 0, 1, 8, 0 });
     bannerIcon.VerticalAlignment(VerticalAlignment::Top);
 
     StackPanel bannerStack;
     bannerStack.Spacing(2);
 
-    bannerTitle = MakeText(L"", 12, g_palette.textPrimary, true);
+    bannerTitle = MakeText(L"", 11, g_palette.textPrimary, true);
     bannerTitle.Visibility(Visibility::Collapsed);
 
-    bannerText = MakeText(L"", 12, g_palette.textSecondary);
+    bannerText = MakeText(L"", 11, g_palette.textSecondary);
     bannerText.TextWrapping(TextWrapping::Wrap);
 
     bannerStack.Children().Append(bannerTitle);
@@ -978,7 +976,7 @@ void MainWindow::Impl::Build() {
 
     // footer
     Grid footer;
-    footer.Margin(Thickness{ 0, 16, 0, 0 });
+    footer.Margin(Thickness{ 0, 10, 0, 0 });
     footer.ColumnDefinitions().Append(ColStar());
     footer.ColumnDefinitions().Append(ColAuto());
     footer.ColumnDefinitions().Append(ColAuto());
@@ -986,15 +984,15 @@ void MainWindow::Impl::Build() {
     content.Children().Append(footer);
 
     StackPanel statusStack;
-    statusStack.Spacing(8);
+    statusStack.Spacing(6);
     statusStack.VerticalAlignment(VerticalAlignment::Center);
 
-    statusText = MakeText(L"就绪 · 选择文件后开始转换", 12, g_palette.textSecondary);
+    statusText = MakeText(L"就绪 · 选择文件后开始转换", 11, g_palette.textSecondary);
     statusStack.Children().Append(statusText);
 
-    overallBar = std::make_shared<LiteBar>(4, g_palette.accentAlt, 26);
-    overallBar->Root().Width(440);
-    overallBar->Root().MaxWidth(440);
+    overallBar = std::make_shared<LiteBar>(3, g_palette.accentAlt, 26);
+    overallBar->Root().Width(280);
+    overallBar->Root().MaxWidth(280);
     overallBar->Root().HorizontalAlignment(HorizontalAlignment::Left);
     statusStack.Children().Append(overallBar->Root());
 
@@ -1010,21 +1008,21 @@ void MainWindow::Impl::Build() {
     // Primary action, drawn as a border so the gradient backdrop is fully under
     // our control (the stock AccentButtonStyle uses the system accent colour).
     convertButton = Border();
-    convertButton.CornerRadius(CornerRadius{ 11, 11, 11, 11 });
-    convertButton.Padding(Thickness{ 22, 0, 24, 0 });
-    convertButton.MinWidth(160);
-    convertButton.Height(40);
-    convertButton.Background(AccentGradient());
+    convertButton.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
+    convertButton.Padding(Thickness{ 16, 0, 18, 0 });
+    convertButton.MinWidth(128);
+    convertButton.Height(32);
+    convertButton.Background(Solid(g_palette.accent));
     convertButton.VerticalAlignment(VerticalAlignment::Center);
 
     StackPanel convertStack;
     convertStack.Orientation(Orientation::Horizontal);
-    convertStack.Spacing(9);
+    convertStack.Spacing(7);
     convertStack.VerticalAlignment(VerticalAlignment::Center);
-    convertIcon = MakeIcon(Symbol::Play, 13, OnAccent(g_palette.accent));
+    convertIcon = MakeIcon(Symbol::Play, 11, OnAccent(g_palette.accent));
     convertStack.Children().Append(convertIcon);
 
-    convertLabel = MakeText(L"开始转换", 14, OnAccent(g_palette.accent), true);
+    convertLabel = MakeText(L"开始转换", 12.5, OnAccent(g_palette.accent), true);
     convertLabel.VerticalAlignment(VerticalAlignment::Center);
     convertStack.Children().Append(convertLabel);
     convertButton.Child(convertStack);
@@ -1041,7 +1039,7 @@ void MainWindow::Impl::Build() {
     }
 
     const double scale = GetDpiForSystem() / 96.0;
-    window.AppWindow().Resize({ static_cast<int32_t>(900 * scale), static_cast<int32_t>(620 * scale) });
+    window.AppWindow().Resize({ static_cast<int32_t>(700 * scale), static_cast<int32_t>(450 * scale) });
 
     root.ActualThemeChanged([this](FrameworkElement const&, Inspectable const&) { SyncTheme(); });
 
@@ -1107,10 +1105,6 @@ void MainWindow::Impl::Build() {
         }
         g_dropWindows.clear();
         g_filesDropped = nullptr;
-        try {
-            if (uiSettings) uiSettings.ColorValuesChanged(accentToken);
-        } catch (...) {
-        }
     });
 
     RefreshCounters();
@@ -1156,21 +1150,6 @@ void MainWindow::Impl::InstallDropSupport() {
     } catch (...) {
     }
 
-    try {
-        uiSettings = winrt::Windows::UI::ViewManagement::UISettings();
-        std::weak_ptr<Impl> weak = weak_from_this();
-        accentToken = uiSettings.ColorValuesChanged([weak](auto const&, auto const&) {
-            if (auto self = weak.lock()) {
-                self->Post([self]() {
-                    try {
-                        self->ApplyPalette(g_palette.dark);
-                    } catch (...) {
-                    }
-                });
-            }
-        });
-    } catch (...) {
-    }
 }
 
 void MainWindow::Impl::ApplyNativeTitlebarTheme() {
@@ -1189,11 +1168,18 @@ void MainWindow::Impl::ApplyNativeTitlebarTheme() {
     const COLORREF border = g_palette.dark ? RGB(48, 48, 48) : RGB(222, 222, 222);
     constexpr DWORD kBorderColor = 34;
     DwmSetWindowAttribute(hwnd, kBorderColor, &border, sizeof(border));
+
+    // Windows 11 rounds window corners at the DWM level; ask for it explicitly
+    // so the app matches the shell even when it is not the foreground window.
+    constexpr DWORD kCornerPreference = 33;
+    constexpr int kRound = 2;
+    DwmSetWindowAttribute(hwnd, kCornerPreference, &kRound, sizeof(kRound));
 }
 
 void MainWindow::Impl::ApplyPalette(bool dark) {
     const Palette previous = g_palette;
     g_palette = MakePalette(dark);
+    SeedAccentResources();
 
     root.Background(Solid(g_palette.surface));
     RecolorTree(root, previous, g_palette);
@@ -1279,12 +1265,11 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     const std::wstring sizeText = ec ? std::wstring(L"未知大小") : FormatBytes(size);
 
     Border row;
-    row.CornerRadius(CornerRadius{ 12, 12, 12, 12 });
-    row.Background(WhiteFill(10));
-    row.BorderBrush(WhiteFill(18));
-    row.BorderThickness(Thickness{ 1, 1, 1, 1 });
-    row.Padding(Thickness{ 12, 10, 10, 10 });
-    row.Margin(Thickness{ 0, 0, 0, 8 });
+    row.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
+    row.Background(Transparent());
+    row.BorderThickness(Thickness{ 0, 0, 0, 0 });
+    row.Padding(Thickness{ 8, 6, 6, 6 });
+    row.Margin(Thickness{ 0, 0, 0, 2 });
 
     Grid layout;
     layout.ColumnDefinitions().Append(ColAuto());
@@ -1292,21 +1277,21 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     layout.ColumnDefinitions().Append(ColStar());
     layout.ColumnDefinitions().Append(ColAuto());
     layout.ColumnDefinitions().Append(ColAuto());
-    layout.ColumnSpacing(10);
+    layout.ColumnSpacing(8);
 
     CheckBox check;
-    check.MinWidth(24);
+    check.MinWidth(20);
     check.VerticalAlignment(VerticalAlignment::Center);
     check.IsChecked(true);
     item->check = check;
     layout.Children().Append(check);
 
     Border iconBorder;
-    iconBorder.Width(34);
-    iconBorder.Height(34);
-    iconBorder.CornerRadius(CornerRadius{ 9, 9, 9, 9 });
-    iconBorder.Background(WhiteFill(16));
-    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 15, Rgba(255, 255, 255, 190)));
+    iconBorder.Width(26);
+    iconBorder.Height(26);
+    iconBorder.CornerRadius(CornerRadius{ 6, 6, 6, 6 });
+    iconBorder.Background(WhiteFill(12));
+    iconBorder.Child(MakeIcon(Symbol::MusicInfo, 11, g_palette.textSecondary));
     iconBorder.VerticalAlignment(VerticalAlignment::Center);
     Grid::SetColumn(iconBorder, 1);
     layout.Children().Append(iconBorder);
@@ -1315,15 +1300,15 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     textStack.Spacing(2);
     textStack.VerticalAlignment(VerticalAlignment::Center);
 
-    item->titleText = MakeText(item->name, 14, g_palette.textPrimary, true);
+    item->titleText = MakeText(item->name, 12.5, g_palette.textPrimary, true);
     item->titleText.TextWrapping(TextWrapping::NoWrap);
     item->titleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->subtitleText = MakeText(sizeText + L" · NCM", 12, g_palette.textTertiary);
+    item->subtitleText = MakeText(sizeText + L" · NCM", 11, g_palette.textTertiary);
     item->subtitleText.TextWrapping(TextWrapping::NoWrap);
     item->subtitleText.TextTrimming(TextTrimming::CharacterEllipsis);
 
-    item->bar = std::make_shared<LiteBar>(3, g_palette.accentAlt, 24);
+    item->bar = std::make_shared<LiteBar>(3, g_palette.accent, 24);
     item->bar->Root().Margin(Thickness{ 0, 6, 0, 0 });
     item->bar->SetVisibility(Visibility::Collapsed);
 
@@ -1334,19 +1319,19 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
     layout.Children().Append(textStack);
 
     Border chip;
-    chip.CornerRadius(CornerRadius{ 10, 10, 10, 10 });
-    chip.Padding(Thickness{ 9, 3, 9, 3 });
+    chip.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
+    chip.Padding(Thickness{ 7, 2, 7, 2 });
     chip.VerticalAlignment(VerticalAlignment::Center);
-    chip.Background(WhiteFill(14));
-    item->chipText = MakeText(L"待转换", 11, g_palette.textSecondary);
+    chip.Background(WhiteFill(12));
+    item->chipText = MakeText(L"待转换", 10, g_palette.textSecondary);
     chip.Child(item->chipText);
     item->chip = chip;
     Grid::SetColumn(chip, 3);
     layout.Children().Append(chip);
 
     Button remove = MakeButton(Symbol::Cancel, L"");
-    remove.MinWidth(28);
-    remove.Padding(Thickness{ 4, 4, 4, 4 });
+    remove.MinWidth(24);
+    remove.Padding(Thickness{ 3, 3, 3, 3 });
     remove.Background(Transparent());
     remove.BorderThickness(Thickness{ 0, 0, 0, 0 });
     remove.VerticalAlignment(VerticalAlignment::Center);
@@ -1355,6 +1340,13 @@ bool MainWindow::Impl::AddFile(std::wstring const& path) {
 
     row.Child(layout);
     item->row = row;
+
+    auto hoverOn = [row](Inspectable const&, PointerRoutedEventArgs const&) {
+        row.Background(WhiteFill(static_cast<uint8_t>(g_palette.dark ? 10 : 12)));
+    };
+    auto hoverOff = [row](Inspectable const&, PointerRoutedEventArgs const&) { row.Background(Transparent()); };
+    row.PointerEntered(hoverOn);
+    row.PointerExited(hoverOff);
 
     auto weak = weak_from_this();
     remove.Click([weak, item](Inspectable const&, RoutedEventArgs const&) {
