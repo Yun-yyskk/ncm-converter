@@ -2,11 +2,36 @@
 
 <img src="docs/icon.png" width="88" alt="应用图标">
 
+[![平台](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows&logoColor=white)](#环境要求)
+[![语言](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)](#构建)
+[![界面](https://img.shields.io/badge/WinUI-3-0067C0)](#实现说明界面为什么是手搓控件)
+[![依赖](https://img.shields.io/badge/运行时依赖-无-2EA043)](#分发便携版)
+
 用 C++ / WinUI 3 写的小工具，把网易云音乐的 `.ncm` 加密容器还原成里面的原始码流 —— **不重新编码**：
 容器里是 FLAC 就输出逐字节无损的 FLAC，是 MP3 就原样输出 MP3（补上 ID3 标签），
 封面、标签和歌词一并写入。
 
 ![界面预览](docs/preview.png)
+
+## 快速开始
+
+不想自己编译的话，直接下 [Releases](../../releases/latest) 里的 `NcmConverter-win-x64.zip`：
+
+1. 解压到任意目录（绿色免安装，不用装 .NET、VC++ 运行库或 Windows App SDK）
+2. 双击 `NcmConverter.exe`
+3. 把 `.ncm` 拖进窗口，点「开始转换」
+
+如果双击时弹出「Windows 已保护你的电脑」，那是 SmartScreen 对带"来自 Internet"标记的
+文件给的提示 —— 右键属性勾一下「解除锁定」，或双击包里的 `解除锁定.cmd` 就没
+了，原因写在[这里](#双击后弹出windows-已保护你的电脑)。
+
+想自己编译见[构建](#构建)。
+
+## 目录
+
+[功能](#功能) · [环境要求](#环境要求) · [构建](#构建) · [分发（便携版）](#分发便携版) ·
+[使用](#使用) · [NCM 容器的解包流程](#ncm-容器的解包流程) · [校验](#校验) ·
+[代码结构](#代码结构) · [实现说明](#实现说明界面为什么是手搓控件) · [调试钩子](#开发与调试钩子)
 
 ## 功能
 
