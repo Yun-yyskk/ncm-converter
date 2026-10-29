@@ -193,6 +193,10 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 ID3v2.3 的文本帧要求 UTF-16 带 BOM，COMM / USLT 里的"空描述"也必须带 BOM —— 少了这两个字节，
 `ffmpeg` 会报 `Incorrect BOM value` 并整帧跳过。
 
+图标用 `FontIcon` + `Segoe Fluent Icons`（Windows 11 自带）。Windows 10 上没有这套字体，
+所以启动时会查一次注册表的字体表，缺了就退回 `Segoe MDL2 Assets` —— 用到的每个码位在两套
+字体里都有字形（已核对两个字体的 cmap 表），Windows 10 上显示的是老版图标而不是空白方块。
+
 主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色并生成调色板，之后
 `ActualThemeChanged` 触发重绘（逐控件重映射画刷，不重建界面）；自绘控件另有
 `Repaint()` 一起换色。强调色不取系统强调色——它经常是棕色或橙色，和这里的图标、

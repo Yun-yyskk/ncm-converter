@@ -462,9 +462,37 @@ wchar_t const* GlyphFor(Symbol symbol) {
     }
 }
 
+// Windows 10 only ships Segoe MDL2 Assets; Segoe Fluent Icons arrived with
+// Windows 11. Every glyph used here exists in both fonts, so pick whichever one
+// the machine actually has instead of rendering empty boxes on Windows 10.
+winrt::hstring IconFont() {
+    static const winrt::hstring font = [] {
+        auto hasFluentIcons = [](HKEY root) {
+            HKEY key = nullptr;
+            if (RegOpenKeyExW(root, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts", 0, KEY_READ, &key) != ERROR_SUCCESS) {
+                return false;
+            }
+            bool found = false;
+            wchar_t name[512];
+            for (DWORD index = 0; !found; ++index) {
+                DWORD length = static_cast<DWORD>(sizeof(name) / sizeof(name[0]));
+                if (RegEnumValueW(key, index, name, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+                found = std::wstring(name, length).find(L"Segoe Fluent Icons") != std::wstring::npos;
+            }
+            RegCloseKey(key);
+            return found;
+        };
+        if (hasFluentIcons(HKEY_LOCAL_MACHINE) || hasFluentIcons(HKEY_CURRENT_USER)) {
+            return winrt::hstring(L"Segoe Fluent Icons");
+        }
+        return winrt::hstring(L"Segoe MDL2 Assets");
+    }();
+    return font;
+}
+
 FontIcon MakeIcon(Symbol symbol, double size, winrt::Windows::UI::Color color) {
     FontIcon icon;
-    icon.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
+    icon.FontFamily(Media::FontFamily(IconFont()));
     icon.Glyph(GlyphFor(symbol));
     icon.FontSize(size);
     icon.Foreground(Solid(color));
@@ -737,7 +765,7 @@ public:
         m_root.VerticalAlignment(VerticalAlignment::Center);
 
         m_tick = FontIcon();
-        m_tick.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
+        m_tick.FontFamily(Media::FontFamily(IconFont()));
         m_tick.Glyph(L"\uE73E");
         m_tick.FontSize(10);
         m_tick.HorizontalAlignment(HorizontalAlignment::Center);
@@ -1228,7 +1256,7 @@ void MainWindow::Impl::Build() {
     bannerInner.ColumnDefinitions().Append(ColStar());
 
     bannerIcon = FontIcon();
-    bannerIcon.FontFamily(Media::FontFamily(L"Segoe Fluent Icons"));
+    bannerIcon.FontFamily(Media::FontFamily(IconFont()));
     bannerIcon.FontSize(14);
     bannerIcon.Margin(Thickness{ 0, 1, 8, 0 });
     bannerIcon.VerticalAlignment(VerticalAlignment::Top);
