@@ -8,6 +8,8 @@
 ## 功能
 
 - **批量转换**：把 .ncm 拖进窗口任意位置，或用「添加文件」多选；支持全选 / 逐个移除
+- **拖放提示**：文件拖到窗口上方时整窗铺一层浅蓝，中间浮出一张小卡片写着「松开即可添加」
+  与本次拖进来的 .ncm 数量，鼠标指针同时变成"复制"样式
 - **输出目录**：默认写回**每个文件自己的源目录**（文件来自不同文件夹时各归各位），
   也可统一指定一个目录
 - **直接覆盖**：目标文件已存在时直接重写，不再多问一句
@@ -131,6 +133,12 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 界面本身同样是代码式构建（`ApplicationT<App>` + `Window()` + 直接装配控件），
 完全绕开 XAML 编译器与 `XamlTypeInfo` 生成。
 
+拖放没有用 `DragAcceptFiles` + `WM_DROPFILES`——那条路径只在松手之后才有消息，拖动过程中
+无从给出反馈，指针也会停在"禁止"上。改成实现 OLE 的 `IDropTarget`，注册到顶层窗口以及它的
+每个 WinUI 子窗口（`RegisterDragDrop` 命中测试看的是光标下那个 HWND）。这里有个坑：
+`winrt::init_apartment` 只做 `CoInitializeEx`，而 `RegisterDragDrop` 要求先
+`OleInitialize`，否则返回 `0x8007000E`（E_OUTOFMEMORY），拖放静默失效。
+
 主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色并生成调色板，之后
 `ActualThemeChanged` 触发重绘（逐控件重映射画刷，不重建界面）；自绘控件另有
 `Repaint()` 一起换色。强调色不取系统强调色——它经常是棕色或橙色，和这里的图标、
@@ -144,6 +152,7 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 | `NcmToFlac.exe --convert in.ncm [out.flac]` | 无界面转换，结果写 `<out>.log` |
 | `NcmToFlac.exe --ui-snapshot <目录> [文件...]` | 渲染窗口到 `ui.png` + 视觉树 `ui-tree.txt` 后退出 |
 | `NcmToFlac.exe --ui-run <目录> [文件...]` | 同上，但先跑一次完整转换，验证界面链路 |
+| 环境变量 `NCM_SNAPSHOT_DROP=2` | 截图时强制显示拖放提示（否则那张浮层只在真实拖拽时出现） |
 
 ## 许可
 
