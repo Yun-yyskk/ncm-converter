@@ -29,6 +29,10 @@ public:
     // tree (element sizes and text) next to it. Used by tools/snapshot.ps1.
     winrt::Windows::Foundation::IAsyncAction SaveSnapshot(std::wstring pngPath, std::wstring treePath);
 
+    // Test hook: paints the drop hint as if a drag were hovering, so the state
+    // can be captured by the snapshot run.
+    void PreviewDropHint(int count);
+
     // Test hook: writes the live visual tree (element sizes and text) only.
     void DumpTreeTo(std::wstring const& treePath);
 

@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -84,6 +85,13 @@ struct App : ApplicationT<App> {
 
         if (g_snapshotDirectory.empty()) return; // interactive run
 
+        // Development hook: paint the drop hint so the snapshot captures it.
+        wchar_t dropHint[32] = {};
+        if (GetEnvironmentVariableW(L"NCM_SNAPSHOT_DROP", dropHint, 32) > 0) {
+            const int count = static_cast<int>(std::wcstol(dropHint, nullptr, 10));
+            window->PreviewDropHint(count > 0 ? count : 2);
+        }
+
         LogStatus(g_snapshotDirectory, L"window activated");
         snapshotTimer = winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
         snapshotTimer.Interval(std::chrono::milliseconds(250));
@@ -130,7 +138,15 @@ winrt::fire_and_forget CaptureWindowAndExit(MainWindow* window, std::wstring dir
 
 int RunGui() {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
+
+    // RegisterDragDrop needs OLE to be running on this thread, and that is a
+    // separate step from the COM apartment: without OleInitialize it fails
+    // with E_OUTOFMEMORY and drops are refused with the "no entry" cursor.
+    const HRESULT ole = OleInitialize(nullptr);
+
     Application::Start([](auto&&) { winrt::make<App>(); });
+
+    if (SUCCEEDED(ole)) OleUninitialize();
     return 0;
 }
 

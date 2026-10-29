@@ -8,6 +8,7 @@
 #endif
 
 #include <windows.h>
+#include <ole2.h>
 #include <unknwn.h>
 #include <inspectable.h>
 #include <restrictederrorinfo.h>
@@ -44,8 +45,6 @@
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
-
-#include <cstdio>
 
 #include <string>
 #include <vector>

@@ -236,42 +236,131 @@ void RecolorTree(DependencyObject const& node, Palette const& from, Palette cons
     }
 }
 
-// Explorer still turns a drop over a window that accepted files through
-// DragAcceptFiles into WM_DROPFILES, so the shell drop path is handled at the
-// HWND level instead of through the XAML drag/drop API.
+// Explorer's drag loop asks the window under the pointer for an OLE drop
+// target, and that answer decides both the cursor and any highlight. The
+// WM_DROPFILES route only reports the files after they have landed, which is
+// why a window driven that way shows the "no drop" cursor and stays silent
+// while the drag is still in the air.
 std::function<void(std::vector<std::wstring> const&)> g_filesDropped;
-std::vector<HWND> g_dropWindows;
+std::function<void(bool, int)> g_dragFeedback;
 
-LRESULT CALLBACK DropSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
-    if (message != WM_DROPFILES) return DefSubclassProc(hwnd, message, wParam, lParam);
+bool IsNcmPath(std::wstring const& path) {
+    std::wstring extension = std::filesystem::path(path).extension().wstring();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](wchar_t character) { return static_cast<wchar_t>(towlower(character)); });
+    return extension == L".ncm";
+}
 
-    auto drop = reinterpret_cast<HDROP>(wParam);
-    std::vector<std::wstring> paths;
+std::vector<std::wstring> PathsFromDataObject(IDataObject* data) {
+    std::vector<std::wstring> result;
+    if (!data) return result;
 
+    FORMATETC format{};
+    format.cfFormat = CF_HDROP;
+    format.dwAspect = DVASPECT_CONTENT;
+    format.lindex = -1;
+    format.tymed = TYMED_HGLOBAL;
+
+    STGMEDIUM medium{};
+    if (FAILED(data->GetData(&format, &medium))) return result;
+
+    auto drop = static_cast<HDROP>(medium.hGlobal);
     const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
     for (UINT index = 0; index < count; ++index) {
         const UINT length = DragQueryFileW(drop, index, nullptr, 0);
         if (length == 0) continue;
-        std::wstring path(length, L'\0');
-        if (DragQueryFileW(drop, index, path.data(), length + 1) != 0) {
-            path.resize(length);
-            paths.push_back(std::move(path));
+        std::wstring path(static_cast<size_t>(length) + 1, L'\0');
+        const UINT copied = DragQueryFileW(drop, index, path.data(), static_cast<UINT>(path.size()));
+        if (copied != 0) {
+            path.resize(copied);
+            result.push_back(std::move(path));
         }
     }
-    DragFinish(drop);
-
-    if (!paths.empty() && g_filesDropped) g_filesDropped(paths);
-    return 0;
+    ReleaseStgMedium(&medium);
+    return result;
 }
+
+// One target per live window: WinUI stacks several child windows in front of
+// the top-level one and OLE resolves the target from the window under the
+// cursor, so every one of them needs the same answer.
+class FileDropTarget : public IDropTarget {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) {
+            *object = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_ref; }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG remaining = --m_ref;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        m_paths.clear();
+        const std::vector<std::wstring> all = PathsFromDataObject(data);
+        for (auto const& path : all) {
+            if (IsNcmPath(path)) m_paths.push_back(path);
+        }
+        const bool accepts = !m_paths.empty();
+        *effect = accepts ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        if (g_dragFeedback) g_dragFeedback(accepts, static_cast<int>(m_paths.size()));
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
+        *effect = m_paths.empty() ? DROPEFFECT_NONE : DROPEFFECT_COPY;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        m_paths.clear();
+        if (g_dragFeedback) g_dragFeedback(false, 0);
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject*, DWORD, POINTL, DWORD* effect) override {
+        std::vector<std::wstring> paths = std::move(m_paths);
+        m_paths.clear();
+        *effect = paths.empty() ? DROPEFFECT_NONE : DROPEFFECT_COPY;
+        if (g_dragFeedback) g_dragFeedback(false, 0);
+        if (!paths.empty() && g_filesDropped) g_filesDropped(paths);
+        return S_OK;
+    }
+
+private:
+    std::atomic<ULONG> m_ref{ 1 };
+    std::vector<std::wstring> m_paths;
+};
+
+struct RegisteredDrop {
+    HWND hwnd = nullptr;
+    FileDropTarget* target = nullptr;
+};
+
+std::vector<RegisteredDrop> g_dropTargets;
 
 void RegisterDropWindow(HWND hwnd) {
     if (!hwnd) return;
-    for (HWND registered : g_dropWindows) {
-        if (registered == hwnd) return;
+    for (auto const& entry : g_dropTargets) {
+        if (entry.hwnd == hwnd) return;
     }
-    DragAcceptFiles(hwnd, TRUE);
-    SetWindowSubclass(hwnd, DropSubclassProc, 1, 0);
-    g_dropWindows.push_back(hwnd);
+
+    auto* target = new FileDropTarget();
+    const HRESULT registered = RegisterDragDrop(hwnd, target);
+    if (FAILED(registered)) {
+        target->Release();
+        return;
+    }
+    g_dropTargets.push_back({ hwnd, target });
 }
 
 // The drop target has to be on the HWND that actually sits under the cursor,
@@ -286,6 +375,14 @@ void RegisterDropTree(HWND hwnd) {
             return TRUE;
         },
         0);
+}
+
+void RevokeDropTargets() {
+    for (auto const& entry : g_dropTargets) {
+        RevokeDragDrop(entry.hwnd);
+        entry.target->Release();
+    }
+    g_dropTargets.clear();
 }
 
 // Deepest folder that still contains every converted file, used by the
@@ -433,6 +530,11 @@ Button MakeButton(Symbol symbol, std::wstring const& text) {
     button.CornerRadius(CornerRadius{ 4, 4, 4, 4 });
     button.Padding(Thickness{ 12, 5, 14, 5 });
     button.MinHeight(32);
+    // The stock focus rectangle is a black double ring that reads as a bug on a
+    // light card, so every button draws a single accent ring instead.
+    button.FocusVisualPrimaryThickness(Thickness{ 2, 2, 2, 2 });
+    button.FocusVisualPrimaryBrush(Solid(g_palette.accent));
+    button.FocusVisualSecondaryThickness(Thickness{ 0, 0, 0, 0 });
     return button;
 }
 
@@ -793,6 +895,13 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     TextBlock bannerText{ nullptr };
     std::shared_ptr<LiteBar> overallBar;
     TextBlock statusText{ nullptr };
+    Border dropOverlay{ nullptr };
+    Border dropCard{ nullptr };
+    Border dropBadge{ nullptr };
+    FontIcon dropGlyph{ nullptr };
+    TextBlock dropTitle{ nullptr };
+    TextBlock dropCountText{ nullptr };
+    DispatcherQueueTimer dropHideTimer{ nullptr };
 
     // The footer only speaks while something is happening; an idle window shows
     // no status line and no progress track at all.
@@ -840,6 +949,10 @@ struct MainWindow::Impl : std::enable_shared_from_this<MainWindow::Impl> {
     void Post(std::function<void()> action);
 
     void InstallDropSupport();
+    void StyleDropHint();
+    void ShowDropHint(int count);
+    void ScheduleDropHintHide();
+    void HideDropHint();
     void ApplyPalette(bool dark);
     void SyncTheme();
     void ApplyNativeTitlebarTheme();
@@ -1180,6 +1293,58 @@ void MainWindow::Impl::Build() {
     Grid::SetColumn(convertButton, 2);
     footer.Children().Append(convertButton);
 
+    // ----- drop hint --------------------------------------------------------
+    // Shown while a drag hovers: the window tints and a small card states what
+    // letting go will do, while the pointer keeps its own "copy" cursor.
+    dropOverlay = Border();
+    dropOverlay.Background(Transparent());
+    dropOverlay.IsHitTestVisible(false);
+    dropOverlay.Visibility(Visibility::Collapsed);
+    Grid::SetRow(dropOverlay, 0);
+    Grid::SetRowSpan(dropOverlay, 2);
+
+    StackPanel dropRow;
+    dropRow.Orientation(Orientation::Horizontal);
+    dropRow.Spacing(14);
+    dropRow.VerticalAlignment(VerticalAlignment::Center);
+
+    dropBadge = Border();
+    dropBadge.Width(44);
+    dropBadge.Height(44);
+    dropBadge.CornerRadius(CornerRadius{ 12, 12, 12, 12 });
+    dropBadge.VerticalAlignment(VerticalAlignment::Center);
+    dropGlyph = MakeIcon(Symbol::Add, 22, OnAccent(g_palette.accent));
+    dropBadge.Child(dropGlyph);
+    dropRow.Children().Append(dropBadge);
+
+    StackPanel dropTexts;
+    dropTexts.Orientation(Orientation::Vertical);
+    dropTexts.Spacing(2);
+    dropTexts.VerticalAlignment(VerticalAlignment::Center);
+
+    dropTitle = MakeText(L"\u677e\u5f00\u5373\u53ef\u6dfb\u52a0", 14, g_palette.textPrimary, true);
+    dropTexts.Children().Append(dropTitle);
+
+    dropCountText = MakeText(L"", 12, g_palette.textSecondary);
+    dropTexts.Children().Append(dropCountText);
+
+    dropRow.Children().Append(dropTexts);
+
+    dropCard = Border();
+    dropCard.Background(Solid(g_palette.card));
+    dropCard.BorderThickness(Thickness{ 1, 1, 1, 1 });
+    dropCard.CornerRadius(CornerRadius{ 12, 12, 12, 12 });
+    dropCard.Padding(Thickness{ 18, 14, 22, 14 });
+    dropCard.HorizontalAlignment(HorizontalAlignment::Center);
+    dropCard.VerticalAlignment(VerticalAlignment::Center);
+    dropCard.Child(dropRow);
+
+    // Appended to the root rather than to the content grid, so the tint covers
+    // the title bar strip too and the whole window changes colour in one piece.
+    dropOverlay.Child(dropCard);
+    root.Children().Append(dropOverlay);
+    StyleDropHint();
+
     // ----- behaviour --------------------------------------------------------
     window.Content(root);
     try {
@@ -1235,11 +1400,9 @@ void MainWindow::Impl::Build() {
 
     window.Closed([this](Inspectable const&, WindowEventArgs const&) {
         closed = true;
-        for (HWND hwnd : g_dropWindows) {
-            DragAcceptFiles(hwnd, FALSE);
-            RemoveWindowSubclass(hwnd, DropSubclassProc, 1);
-        }
-        g_dropWindows.clear();
+        if (dropHideTimer) dropHideTimer.Stop();
+        RevokeDropTargets();
+        g_dragFeedback = nullptr;
         g_filesDropped = nullptr;
     });
 
@@ -1264,6 +1427,30 @@ void MainWindow::Impl::InstallDropSupport() {
         }
     };
 
+    std::weak_ptr<Impl> weakSelf = weak_from_this();
+    g_dragFeedback = [weakSelf](bool active, int count) {
+        if (auto self = weakSelf.lock()) {
+            self->Post([self, active, count]() {
+                if (active) {
+                    self->ShowDropHint(count);
+                } else {
+                    self->ScheduleDropHintHide();
+                }
+            });
+        }
+    };
+
+    // The drag loop reports a leave/enter pair every time the pointer crosses
+    // one of WinUI's child windows, so the hide waits a moment and the hint
+    // does not blink while the pointer moves around inside the window.
+    dropHideTimer = queue.CreateTimer();
+    dropHideTimer.Interval(std::chrono::milliseconds(120));
+    dropHideTimer.IsRepeating(false);
+    dropHideTimer.Tick([weakSelf](DispatcherQueueTimer const& sender, Inspectable const&) {
+        sender.Stop();
+        if (auto self = weakSelf.lock()) self->HideDropHint();
+    });
+
     HWND hwnd = nullptr;
     try {
         hwnd = winrt::Microsoft::UI::GetWindowFromWindowId(window.AppWindow().Id());
@@ -1275,7 +1462,7 @@ void MainWindow::Impl::InstallDropSupport() {
     RegisterDropTree(hwnd);
 
     try {
-        auto rescan = winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().CreateTimer();
+        auto rescan = queue.CreateTimer();
         rescan.Interval(std::chrono::milliseconds(700));
         std::weak_ptr<Impl> weak = weak_from_this();
         rescan.Tick([weak, hwnd, rescan](auto const&, auto const&) mutable {
@@ -1285,7 +1472,41 @@ void MainWindow::Impl::InstallDropSupport() {
         rescan.Start();
     } catch (...) {
     }
+}
 
+void MainWindow::Impl::StyleDropHint() {
+    if (!dropOverlay) return;
+
+    dropOverlay.Background(Solid(Tint(g_palette.accent, static_cast<uint8_t>(g_palette.dark ? 0x40 : 0x22))));
+    dropCard.Background(Solid(g_palette.card));
+    dropCard.BorderBrush(Solid(g_palette.stroke));
+    dropBadge.Background(Solid(g_palette.accent));
+    dropGlyph.Foreground(Solid(OnAccent(g_palette.accent)));
+    dropTitle.Foreground(Solid(g_palette.textPrimary));
+    dropCountText.Foreground(Solid(g_palette.textSecondary));
+}
+
+void MainWindow::Impl::ShowDropHint(int count) {
+    if (!dropOverlay) return;
+    if (dropHideTimer) dropHideTimer.Stop();
+
+    dropCountText.Text(hstring(count == 1 ? L"1 个 .ncm 文件" : std::to_wstring(count) + L" 个 .ncm 文件"));
+    StyleDropHint();
+    dropOverlay.Visibility(Visibility::Visible);
+}
+
+void MainWindow::Impl::ScheduleDropHintHide() {
+    if (!dropOverlay) return;
+    if (!dropHideTimer) {
+        HideDropHint();
+        return;
+    }
+    dropHideTimer.Stop();
+    dropHideTimer.Start();
+}
+
+void MainWindow::Impl::HideDropHint() {
+    if (dropOverlay) dropOverlay.Visibility(Visibility::Collapsed);
 }
 
 void MainWindow::Impl::ApplyNativeTitlebarTheme() {
@@ -1341,6 +1562,7 @@ void MainWindow::Impl::ApplyPalette(bool dark) {
     }
 
     RecolorItemChips();
+    StyleDropHint();
     ClearInfo();
     ApplyNativeTitlebarTheme();
 }
@@ -1766,6 +1988,10 @@ MainWindow::MainWindow() : m_impl(std::make_shared<Impl>()) {
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::PreviewDropHint(int count) {
+    if (m_impl) m_impl->ShowDropHint(count);
+}
 
 void MainWindow::RunConversionNow() {
     if (m_impl) m_impl->StartConversion();
