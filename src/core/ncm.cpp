@@ -130,7 +130,7 @@ bool DecodeNcmFile(const std::wstring& path, NcmContent& out, std::wstring& erro
         return false;
     }
     if (memcmp(raw.data(), kNcmMagic, sizeof(kNcmMagic)) != 0) {
-        error = L"文件头不是 CTENFDAM，不是网易云 NCM 文件。";
+        error = L"文件头不是 CTENFDAM，不是 NCM 文件。";
         return false;
     }
 

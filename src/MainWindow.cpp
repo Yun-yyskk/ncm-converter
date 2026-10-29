@@ -681,7 +681,7 @@ std::vector<std::wstring> PickPaths(bool pickFolder, std::wstring const& title) 
 
     if (!pickFolder) {
         COMDLG_FILTERSPEC filters[] = {
-            { L"网易云音乐文件 (*.ncm)", L"*.ncm" },
+            { L"NCM 文件 (*.ncm)", L"*.ncm" },
             { L"所有文件", L"*.*" },
         };
         dialog->SetFileTypes(ARRAYSIZE(filters), filters);
