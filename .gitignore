@@ -14,3 +14,4 @@ tools/.cache/
 # Screenshots and test artifacts; only the README preview is tracked
 /docs/*
 !/docs/preview.png
+!/docs/icon.png

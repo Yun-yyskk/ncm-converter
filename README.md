@@ -1,5 +1,7 @@
 # NCM 转换
 
+<img src="docs/icon.png" width="88" alt="应用图标">
+
 用 C++ / WinUI 3 写的小工具，把网易云音乐的 `.ncm` 加密容器还原成里面的原始码流 —— **不重新编码**：
 容器里是 FLAC 就输出逐字节无损的 FLAC，是 MP3 就原样输出 MP3（补上 ID3 标签），
 封面、标签和歌词一并写入。
@@ -153,6 +155,7 @@ comment / USLT(歌词) / APIC(封面)。
 | `src/App.cpp` | 启动、命令行模式与两个开发钩子 |
 | `tools/fetch-packages.ps1` | 递归下载 Windows App SDK 依赖包 |
 | `tools/screenshot.ps1` | 走 `--ui-snapshot` 渲染窗口到 `docs/preview.png` |
+| `tools/make-icon.py` | 用 Pillow 画应用图标，输出 `res/app.ico`（9 个尺寸）与 `docs/icon.png` |
 | `tools/package.ps1` | 打便携 zip：校验运行库、加使用说明、压缩到 `dist` |
 
 ## 实现说明：界面为什么是"手搓控件"
@@ -202,6 +205,12 @@ ID3v2.3 的文本帧要求 UTF-16 带 BOM，COMM / USLT 里的"空描述"也必�
 `Repaint()` 一起换色。强调色不取系统强调色——它经常是棕色或橙色，和这里的图标、
 进度条不搭——固定用 Windows 11 的默认蓝（浅色 `#005FB8` / 深色 `#60CDFF`），
 前景文字再按 WCAG 对比度自动选黑或白。
+
+图标是蓝色圆角方块加一枚白色音符，由 `tools/make-icon.py`（Pillow）从 2048 px 的画布
+缩出 16 / 20 / 24 / 32 / 40 / 48 / 64 / 128 / 256 九个尺寸。`res/app.ico` 通过 `res/app.rc`
+编进 exe 的资源表（资源管理器、任务栏、Alt-Tab 的兜底来源），同时随 exe 放在旁边，由
+`AppWindow.SetIcon` 显式设到窗口上 —— WinUI 3 的窗口不会自动继承 exe 图标，少了这一步
+任务栏和 Alt-Tab 里还是空白方块。
 
 ## 开发与调试钩子
 

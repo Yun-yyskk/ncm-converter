@@ -490,6 +490,26 @@ winrt::hstring IconFont() {
     return font;
 }
 
+// The shell reads the executable icon from its resource table, but a WinUI
+// window does not pick that up on its own: without this the taskbar and the
+// Alt-Tab switcher show a blank square. Point the AppWindow at the .ico that is
+// shipped next to the executable.
+void ApplyWindowIcon(winrt::Microsoft::UI::Xaml::Window const& window) {
+    try {
+        wchar_t module[MAX_PATH]{};
+        if (GetModuleFileNameW(nullptr, module, MAX_PATH) == 0) return;
+        std::wstring path = module;
+        const auto slash = path.find_last_of(L"\\/");
+        if (slash == std::wstring::npos) return;
+        path.resize(slash + 1);
+        path += L"app.ico";
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+        window.AppWindow().SetIcon(path);
+    } catch (...) {
+        // A missing window icon is cosmetic, never a reason to fail startup.
+    }
+}
+
 FontIcon MakeIcon(Symbol symbol, double size, winrt::Windows::UI::Color color) {
     FontIcon icon;
     icon.FontFamily(Media::FontFamily(IconFont()));
@@ -1400,6 +1420,7 @@ void MainWindow::Impl::Build() {
 
     const double scale = GetDpiForSystem() / 96.0;
     window.AppWindow().Resize({ static_cast<int32_t>(640 * scale), static_cast<int32_t>(360 * scale) });
+    ApplyWindowIcon(window);
 
     root.ActualThemeChanged([this](FrameworkElement const&, Inspectable const&) { SyncTheme(); });
 

@@ -31,6 +31,11 @@ if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 $exe = Join-Path $root ("bin\x64\" + $Configuration + "\NcmConverter.exe")
 if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
 
+# The icon is compiled into the exe, but the window itself is pointed at the
+# file, so it has to travel next to the executable as well.
+$icon = Join-Path $root 'res\app.ico'
+if (Test-Path $icon) { Copy-Item $icon (Join-Path (Split-Path -Parent $exe) 'app.ico') -Force }
+
 # The project links against the dynamic CRT, so a plain copy of bin\x64\<cfg>
 # fails to start on a machine without the Visual C++ redistributable. Ship the
 # runtime next to the executable instead of asking the user to install it.

@@ -1,0 +1,5 @@
+// The lowest-numbered icon in the image is what Explorer, the taskbar and the
+// Alt-Tab switcher show for NcmConverter.exe.
+#define IDI_APPICON 1
+
+IDI_APPICON ICON "res\\app.ico"

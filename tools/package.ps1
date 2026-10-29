@@ -86,7 +86,21 @@ pause
 
 if (-not (Test-Path $readmePath)) { throw "failed to write $readmePath" }
 
-Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip -CompressionLevel Optimal
+# Compress-Archive on Windows PowerShell writes backslash separators into the
+# entry names, which some extractors then treat as part of the file name. Zip
+# them by hand so the archive carries the standard forward-slash paths.
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$zipStream = [System.IO.File]::Open($zip, [System.IO.FileMode]::Create)
+try {
+    $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+    try {
+        Get-ChildItem $staging -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($staging.Length + 1).Replace('\', '/')
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive, $_.FullName, $relative, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    } finally { $archive.Dispose() }
+} finally { $zipStream.Dispose() }
 $sizeMb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 $count = (Get-ChildItem $staging -Recurse -File).Count
 Write-Host ("folder -> " + $staging + " (" + $count + " files)")

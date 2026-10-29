@@ -91,6 +91,7 @@
     </ClCompile>
     <ClInclude Include="src\**\*.h" />
     <Manifest Include="res\app.manifest" />
+    <ResourceCompile Include="res\app.rc" />
   </ItemGroup>
 
   <ItemDefinitionGroup>
