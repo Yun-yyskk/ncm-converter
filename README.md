@@ -1,12 +1,15 @@
-# NCM 转 FLAC
+# NCM 转换
 
-用 C++ / WinUI 3 写的小工具，把网易云音乐的 `.ncm` 加密容器还原成标准 FLAC —— **不重新编码**，
-解出来的就是原始 FLAC 码流，做到逐字节无损，同时把封面、标签和歌词一起写回文件。
+用 C++ / WinUI 3 写的小工具，把网易云音乐的 `.ncm` 加密容器还原成里面的原始码流 —— **不重新编码**：
+容器里是 FLAC 就输出逐字节无损的 FLAC，是 MP3 就原样输出 MP3（补上 ID3 标签），
+封面、标签和歌词一并写入。
 
 ![界面预览](docs/preview.png)
 
 ## 功能
 
+- **两种输出**：FLAC 码流 → `.flac`（VORBIS_COMMENT + PICTURE）；MP3 码流 → `.mp3`（ID3v2.3 + APIC），
+  扩展名由码流本身决定，不需要手动选
 - **批量转换**：把 .ncm 拖进窗口任意位置，或用「添加文件」多选；支持全选 / 逐个移除
 - **拖放提示**：文件拖到窗口上方时整窗铺一层浅蓝，中间浮出一张小卡片写着「松开即可添加」
   与本次拖进来的 .ncm 数量，鼠标指针同时变成"复制"样式
@@ -17,11 +20,11 @@
   窗口会实时重绘（包括标题栏）
 - **一键打开目录**：转换完成后直接跳到输出位置（输出分散在多个目录时跳到它们的公共上层）
 - **完整标签**：TITLE / ARTIST / ALBUM / ALBUMARTIST / TITLE_TRANSLATED / MUSIC_ID /
-  COMMENT / LYRICS / ENCODER 顺序写入 VORBIS_COMMENT
-- **封面嵌入**：把 NCM 内嵌的专辑图作为 PICTURE 块（front cover）写进 FLAC
+  COMMENT / LYRICS / ENCODER
+- **封面嵌入**：把 NCM 内嵌的专辑图作为 FLAC 的 PICTURE 块（front cover）或 MP3 的 APIC 帧
 - **歌词**：优先用 NCM 内的歌词（逐行 JSON、YRC 卡拉OK 两种格式都会转成标准 `[mm:ss.xx]` LRC），
   没有时回退到同名 `.lrc` 文件
-- **命令行模式**：`NcmToFlac.exe --convert in.ncm [out.flac]`，结果写 `<out>.log`，便于批处理与回归测试
+- **命令行模式**：`NcmConverter.exe --convert in.ncm [out]`，结果写 `<输出>.log`，便于批处理与回归测试
 
 ## 环境要求
 
@@ -42,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File tools\fetch-packages.ps1
 powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 ```
 
-产物：`bin\x64\Release\NcmToFlac.exe`，同目录带上 Windows App SDK 运行库 DLL，可整体拷走使用。
+产物：`bin\x64\Release\NcmConverter.exe`，同目录带上 Windows App SDK 运行库 DLL，可整体拷走使用。
 
 > 没有走 `msbuild -t:Restore`：Build Tools 里不带 NuGet.targets，所以由
 > `tools\fetch-packages.ps1` 按 nuspec 递归抓包、解压到标准 NuGet 目录，
@@ -51,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
 ## 使用
 
-1. 运行 `NcmToFlac.exe`
+1. 运行 `NcmConverter.exe`
 2. 把 `.ncm` 文件拖进窗口，或点「添加文件」多选
 3. 选输出位置（默认写回各文件自己的源目录，可改为统一目录）
 4. 点「开始转换」，状态胶囊从「待转换」变成「完成」
@@ -62,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
 `.ncm` 是网易云音乐加过密的容器，内部本来就存着完整的 FLAC / MP3 码流，解密即可，不需要转码：
 
-1. 文件头 `CTENFDAM` + 2 字节，随后是 `uint32` 的密钥长度与 `uint32` 的图片占位字段
+1. 文件头 `CTENFDAM` + 2 字节，随后是 `uint32` 的密钥长度
 2. **音频密钥**：密文逐字节 XOR `0x64` → AES-128-ECB 解密 → **去掉 PKCS#7 填充** →
    去掉 `neteasecloudmusic` 前缀，剩下 98 字节作为音频解密种子。
    最常见的坑就是忘了去填充：种子多出十几个字节，解出来的音频全是噪声
@@ -71,11 +74,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 4. 跳过 CRC32 / 版本号 / 封面长度字段，读封面图（JPEG / PNG / WebP / GIF），音频从封面之后开始
 5. **音频**：用种子做 KSA 生成 256 字节置换盒，再按 RC4 变体逐字节异或。
    注意这里**解密时不能交换置换盒**（与标准 RC4 不同），否则前 4 个字节还能对上，从第 5 个字节起全错
-6. 得到的 `fLaC` 码流即可直接使用
+6. 解密结果以 `fLaC` 开头就是 FLAC，以 `ID3` 或 `0xFFEx` 帧同步开头就是 MP3；两者都不像就报不支持
 
-写文件时保留原始 `STREAMINFO`（含 PCM MD5），丢掉源文件自带的其他标签块，重新生成
+写 FLAC 时保留原始 `STREAMINFO`（含 PCM MD5），丢掉源文件自带的其他标签块，重新生成
 `VORBIS_COMMENT` 与 `PICTURE`，再接上原始音频帧 —— 帧 CRC 与 PCM MD5 前后一致，
 可以证明全程没有重编码。
+
+MP3 则剥掉容器里原有的 ID3v2 与结尾的 ID3v1，写一份新的 ID3v2.3（文本帧一律 UTF-16 + BOM），
+音频帧原样拷贝 —— 解码 PCM 与源 MP3 逐字节相同。
 
 ## 校验
 
@@ -83,10 +89,14 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 
 | 检查项 | 结果 |
 | --- | --- |
-| 输出 FLAC 大小 | 26,630,476 字节 |
+| 输出 FLAC 大小 | 26,630,479 字节（`ENCODER` 字符串长度变化时会浮动几个字节，音频字节不受影响） |
 | 解码 PCM MD5 | `9ce663edd3b08a683d0c2cd2602028ac`，与 `STREAMINFO` 记录一致 |
 | 帧 CRC | 逐帧复核通过 |
 | 完整解码 | 全程无错误 |
+
+MP3 分支用一个"外壳按格式自造、内部塞真实 MP3"的合成容器验证：输出 `.mp3` 的
+解码 PCM MD5 与源 MP3 相同，`ffmpeg` 能读出 title / artist / album / TIT3(译名) /
+comment / USLT(歌词) / APIC(封面)。
 
 ## 代码结构
 
@@ -95,10 +105,11 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Configuration Release
 | `src/core/aes.*` | BCrypt 的 AES-128-ECB（只解密，PKCS#7 由调用方剥离） |
 | `src/core/base64.*` | Base64 解码（容忍换行与 URL-safe 变体） |
 | `src/core/json.*` | 最小 JSON 解析器 |
-| `src/core/ncm.*` | 容器解包：密钥、元数据、封面、音频解密 |
+| `src/core/ncm.*` | 容器解包：密钥、元数据、封面、音频解密、码流类型识别 |
 | `src/core/flac.*` | 解析 `STREAMINFO`、重写元数据块、读取封面尺寸 |
+| `src/core/id3.*` | MP3 帧头探测 + ID3v2.3 标签写出 |
 | `src/core/lyrics.*` | LRC / YRC / JSON 歌词统一成标准 LRC |
-| `src/core/convert.*` | 单文件转换编排（进度回调、覆盖策略、错误文案） |
+| `src/core/convert.*` | 单文件转换编排（码流决定输出格式、进度回调、覆盖策略、错误文案） |
 | `src/MainWindow.*` | WinUI 3 界面（纯 C++ 构建，无 XAML、无代码生成） |
 | `src/App.cpp` | 启动、命令行模式与两个开发钩子 |
 | `tools/fetch-packages.ps1` | 递归下载 Windows App SDK 依赖包 |
@@ -139,6 +150,9 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 `winrt::init_apartment` 只做 `CoInitializeEx`，而 `RegisterDragDrop` 要求先
 `OleInitialize`，否则返回 `0x8007000E`（E_OUTOFMEMORY），拖放静默失效。
 
+ID3v2.3 的文本帧要求 UTF-16 带 BOM，COMM / USLT 里的"空描述"也必须带 BOM —— 少了这两个字节，
+`ffmpeg` 会报 `Incorrect BOM value` 并整帧跳过。
+
 主题跟随走系统事件：启动时由 `UISettings` 判断浅色还是深色并生成调色板，之后
 `ActualThemeChanged` 触发重绘（逐控件重映射画刷，不重建界面）；自绘控件另有
 `Repaint()` 一起换色。强调色不取系统强调色——它经常是棕色或橙色，和这里的图标、
@@ -149,9 +163,9 @@ for TargetType 'Microsoft.UI.Xaml.Controls.ProgressBar' in assembly 'Unknown'.
 
 | 命令 | 用途 |
 | --- | --- |
-| `NcmToFlac.exe --convert in.ncm [out.flac]` | 无界面转换，结果写 `<out>.log` |
-| `NcmToFlac.exe --ui-snapshot <目录> [文件...]` | 渲染窗口到 `ui.png` + 视觉树 `ui-tree.txt` 后退出 |
-| `NcmToFlac.exe --ui-run <目录> [文件...]` | 同上，但先跑一次完整转换，验证界面链路 |
+| `NcmConverter.exe --convert in.ncm [out]` | 无界面转换，结果写 `<输出>.log`（`format=` 行说明识别成 FLAC 还是 MP3） |
+| `NcmConverter.exe --ui-snapshot <目录> [文件...]` | 渲染窗口到 `ui.png` + 视觉树 `ui-tree.txt` 后退出 |
+| `NcmConverter.exe --ui-run <目录> [文件...]` | 同上，但先跑一次完整转换，验证界面链路 |
 | 环境变量 `NCM_SNAPSHOT_DROP=2` | 截图时强制显示拖放提示（否则那张浮层只在真实拖拽时出现） |
 
 ## 许可
